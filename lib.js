@@ -5,9 +5,10 @@ var EventEmitter = require('events');
 var jspack = require('jspack').jspack;
 const os = require('os');
 const Netmask = require('netmask').Netmask;
-const winston = require('winston');
-
-const swap16 = (val) => { return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF); };
+// Require Logging
+const LoggingBase = require('@hibas123/nodelogging').LoggingBase;
+// Init Logger
+let log;
 
 // ArtDMX Header for jspack
 var ArtDmxHeaderFormat = '!7sBHHBBBBH';
@@ -29,26 +30,18 @@ class dmxnet {
     this.sName = options.sName || 'dmxnet'; // Shortname
     this.lName = options.lName ||
       'dmxnet - OpenSource ArtNet Transceiver'; // Longname
-
-    // Init Logger
-    this.logOptions = Object.assign(
-      {
-        level: 'info',
-        format: winston.format.combine(
-          winston.format.splat(),
-          winston.format.timestamp(),
-          winston.format.label({ label: 'dmxnet' }),
-          winston.format.printf(({ level, message, label, timestamp }) => {
-            return `${timestamp} [${label}] ${level}: ${message}`;
-          })
-        ),
-        transports: [new winston.transports.Console()]
-      },
-      options.log
-    );
-    this.logger = new winston.createLogger(this.logOptions);
-
-    this.hosts = options.hosts || [];
+    this.logOptions = options.log || {name: 'dmxnet'};
+    // Set log levels
+    if (this.verbose > 0) {
+      // ToDo: Set Log Level
+      if (this.verbose > 1) {
+        // ToDo: Set Log Level Debug
+      }
+    } else {
+      // ToDo: Set Log Level
+    }
+    // Create Logger
+    log = new LoggingBase(this.logOptions);
     // Log started information
     this.logger.info('started with options: %o', options);
 

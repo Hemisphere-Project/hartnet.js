@@ -361,8 +361,8 @@ class sender {
     if (this.net > 127) {
       this.handleError(new Error('Invalid Net, must be smaller than 128'));
     }
-    if (this.universe > 15) {
-      this.handleError(new Error('Invalid Universe, must be smaller than 16'));
+    if (this.universe > 63) {
+      this.handleError(new Error('Invalid Universe, must be smaller than 64'));
     }
     if (this.subnet > 15) {
       this.handleError(new Error('Invalid subnet, must be smaller than 16'));
@@ -569,8 +569,8 @@ class receiver extends EventEmitter {
     if (this.net > 127) {
       this.parent.handleError( new Error('Invalid Net, must be smaller than 128'));
     }
-    if (this.universe > 15) {
-      this.parent.handleError(new Error('Invalid Universe, must be smaller than 16'));
+    if (this.universe > 63) {
+      this.parent.handleError(new Error('Invalid Universe, must be smaller than 64'));
     }
     if (this.subnet > 15) {
       this.parent.handleError(new Error('Invalid subnet, must be smaller than 16'));

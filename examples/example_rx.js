@@ -1,12 +1,12 @@
 // Load hartnet as libary
 var hartnet = require('../hartnet.js');
 
-// Create new dmxnet instance
-var artnet = new hartnet.dmxnet({
+// Create new hartnet instance
+var artnet = new hartnet.hartnet({
   hosts: ['10.0.0.0'],
 });
 
-// Create a new receiver instance, listening for universe 5 on net 0 subnet 0
+// Create a new receiver instance, listening for universe 0 on net 0 subnet 0
 var receiver = artnet.newReceiver({
   subnet: 0,
   universe: 0,
@@ -15,5 +15,5 @@ var receiver = artnet.newReceiver({
 
 // Dump data if DMX Data is received
 receiver.on('data', function(data) {
-  console.log('DMX data:', data); // eslint-disable-line no-console
+  console.log('DMX data:', data);
 });

@@ -14,9 +14,9 @@ var ArtDmxHeaderFormat = '!7sBHHBBBBH';   // ArtDMX Header (jspack)
 var ArtDmxPayloadFormat = '512B';         // ArtDMX Payload (jspack)
 
 /** Class representing the core dmxnet structure */
-class dmxnet {
+class hartnet {
   /**
-   * Creates a new dmxnet instance
+   * Creates a new hartnet instance
    *
    * @param {object} options - Options for the whole instance
    */
@@ -26,13 +26,13 @@ class dmxnet {
     this.esta = options.esta || 0x0000; // ESTA code hex
     this.port = options.listen || 6454; // Port listening for incoming data
     this.hosts = options.hosts || []; // Array of IPs to listen for ArtPoll
-    this.sName = options.sName || 'dmxnet'; // Shortname
-    this.lName = options.lName || 'dmxnet - OpenSource ArtNet Transceiver'; // Longname
-    this.logOptions = options.log || {name: 'dmxnet', files: false, console: true, level: 'info'};
+    this.sName = options.sName || 'hartnet'; // Shortname
+    this.lName = options.lName || 'hartnet - OpenSource ArtNet Transceiver'; // Longname
+    this.logOptions = options.log || {name: 'hartnet', files: false, console: true, level: 'info'};
 
     // Create Logger
     this.logger = new LoggingBase(this.logOptions);
-    this.logger.debug('DMXnet started: ', options);
+    this.logger.debug('HARTNET started: ', options);
 
     // error function to call on error to avoid unhandled exeptions e.g. in Node-RED
     this.errFunc = typeof options.errFunc === 'function' ?  options.errFunc : undefined;
@@ -262,7 +262,7 @@ class dmxnet {
       var netSwitch = 0x01;
       var subSwitch = 0x01;
       var status = 0b11010000;
-      var stateString = '#0001 [' + ('000' + this.artPollReplyCount).slice(-4) + '] dmxnet ArtNet-Transceiver running';
+      var stateString = '#0001 [' + ('000' + this.artPollReplyCount).slice(-4) + '] hartnet ArtNet-Transceiver running';
       var sourceip = ip.ip;
       var broadcastip = ip.broadcast;
 
@@ -418,10 +418,10 @@ class dmxnet {
  */
 class sender {
   /**
-   * Creates a new sender, usually called trough factory in dmxnet
+   * Creates a new sender, usually called trough factory in hartnet
    *
    * @param {object} opt - Options for the sender
-   * @param {dmxnet} parent - Instance of the dmxnet parent
+   * @param {hartnet} parent - Instance of the hartnet parent
    */
   constructor(opt, parent) 
   {
@@ -601,10 +601,10 @@ function isBroadcast(ipaddress) {
  */
 class receiver extends EventEmitter {
   /**
-   * Creates a new receiver, usually called trough factory in dmxnet
+   * Creates a new receiver, usually called trough factory in hartnet
    *
    * @param {object} opt - Options for the receiver
-   * @param {dmxnet} parent - Instance of the dmxnet parent
+   * @param {hartnet} parent - Instance of the hartnet parent
    */
   constructor(opt, parent) {
     super();
@@ -647,7 +647,7 @@ class receiver extends EventEmitter {
   }
 }
 
-// Export dmxnet
+// Export hartnet
 module.exports = {
-  dmxnet,
+  hartnet,
 };

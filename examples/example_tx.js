@@ -6,7 +6,7 @@ var hartnet = require('../hartnet.js');
 var artnet = new hartnet.hartnet({
   log: {
     name: "hartnet-tx",
-    level: "trace"
+    level: "debug"
   }
 });
 

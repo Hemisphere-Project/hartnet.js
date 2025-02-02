@@ -12,9 +12,6 @@ const pino = require('pino')
 
 const swap16 = (val) => { return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF); };
 
-var ArtDmxHeaderFormat = '!7sBHHBBBBH';   // ArtDMX Header (jspack)
-var ArtDmxPayloadFormat = '512B';         // ArtDMX Payload (jspack)
-
 class hartnet {
 
   options = {
@@ -500,8 +497,7 @@ class sender {
     // Build packet: ID Int8[8], OpCode Int16 0x5000 (conv. to 0x0050),
     // ProtVer Int16, Sequence Int8, PhysicalPort Int8,
     // SubnetUniverseNet Int16, Length Int16
-    var udppacket = Buffer.from(jspack.Pack(ArtDmxHeaderFormat +
-      ArtDmxPayloadFormat,
+    var udppacket = Buffer.from(jspack.Pack('!7sBHHBBBBH' + '512B',
       ['Art-Net', 0, 0x0050, 14, this.ArtDmxSeq, 0, this.port_subuni, this.options.net, 512].concat(this.values)));
     // Increase Sequence Counter
     this.ArtDmxSeq = (this.ArtDmxSeq + 1) % 256;

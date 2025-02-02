@@ -1,0 +1,12 @@
+- fix documentation
+
+- object creation is messy
+
+- ArtPollReply to specific iface (depending on senders / receiver ip binding)
+
+- ArtPoll -> find remote fixture -> allow Unicast / Broadcast mode for sender on ip subnet
+
+- Example: 
+    * bridge (receive on one ip range, send to another)
+    * recorder (receive and store data with timestamp into file)
+    * player (replay files to sender)

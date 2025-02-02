@@ -1,8 +1,9 @@
-'use strict';
-// Load dmxnet as libary
-var dmxlib = require('./lib.js');
+
+// Load hartnet as libary
+var hartnet = require('../hartnet.js');
+
 // Create new dmxnet instance
-var dmxnet = new dmxlib.dmxnet({
+var artnet = new hartnet.dmxnet({
   verbose: 1,
   log: {
     files: false,
@@ -10,7 +11,7 @@ var dmxnet = new dmxlib.dmxnet({
   }
 });
 // Create new Sender instance
-var sender = dmxnet.newSender({
+var sender = artnet.newSender({
   ip: '255.255.255.255',
   subnet: 0,
   universe: 5,

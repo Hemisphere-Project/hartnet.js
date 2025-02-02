@@ -1,18 +1,14 @@
 {
-  "name": "dmxnet",
-  "version": "0.9.0",
-  "description": "ArtNet-DMX-sender and receiver for nodejs",
-  "main": "lib.js",
-  "types": "lib.d.ts",
+  "name": "hartnet.js",
+  "version": "0.10.0",
+  "description": "ArtNet - sender and receiver for nodejs",
+  "main": "hartnet.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 0",
-    "lint": "eslint --ignore-path .gitignore . --max-warnings 0",
-    "lintfix": "eslint --ignore-path .gitignore --fix .",
-    "jsdoc": "jsdoc lib.js -d jsdoc"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/margau/dmxnet.git"
+    "url": "git+https://github.com/Hemisphere-Project/hartnet.js"
   },
   "keywords": [
     "artnet",
@@ -20,21 +16,16 @@
     "lightning",
     "stage"
   ],
-  "author": "margau",
+  "author": "margau, maigre",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/margau/dmxnet/issues"
+    "url": "https://github.com/Hemisphere-Project/hartnet.js/issues"
   },
-  "homepage": "https://github.com/margau/dmxnet#readme",
+  "homepage": "https://github.com/Hemisphere-Project/hartnet.js#readme",
   "dependencies": {
     "@hibas123/nodelogging": "^2.4.5",
     "jspack": "0.0.4",
     "netmask": "^2.0.1"
   },
-  "devDependencies": {
-    "eslint": "^5.16.0",
-    "eslint-plugin-jsdoc": "^15.12.2",
-    "eslint-plugin-node": "^10.0.0",
-    "jsdoc": "^4.0.4"
-  }
+  "devDependencies": {}
 }

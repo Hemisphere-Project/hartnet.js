@@ -1,14 +1,14 @@
-'use strict';
-// Load dmxnet as libary
-var dmxlib = require('./lib.js');
+// Load hartnet as libary
+var hartnet = require('../hartnet.js');
+
 // Create new dmxnet instance
-var dmxnet = new dmxlib.dmxnet({
-  hosts: ['192.168.1.13'],
+var artnet = new hartnet.dmxnet({
+  hosts: ['10.0.0.0'],
 });
 
 // Create a new receiver instance, listening for universe 5 on net 0 subnet 0
-var receiver = dmxnet.newReceiver({
-  subnet: 1,
+var receiver = artnet.newReceiver({
+  subnet: 0,
   universe: 0,
   net: 0,
 });

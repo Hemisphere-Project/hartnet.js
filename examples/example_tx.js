@@ -4,18 +4,18 @@ var hartnet = require('../hartnet.js');
 
 // Create new hartnet instance
 var artnet = new hartnet.hartnet({
-  verbose: 1,
   log: {
-    files: false,
-    name: "hartnet"
+    name: "hartnet-tx",
+    level: "trace"
   }
 });
 
 // Create new Sender instance
 var sender = artnet.newSender({
-  ip: '255.255.255.255',
+  to: '192.168.1.0',
+  broadcast: true,
+  universe: 0,
   subnet: 0,
-  universe: 5,
   net: 0,
 });
 

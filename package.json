@@ -1,10 +1,10 @@
 {
   "name": "hartnet.js",
   "version": "0.10.0",
-  "description": "ArtNet - sender and receiver for nodejs",
+  "description": "ArtNet sender and receiver for nodejs",
   "main": "hartnet.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 0",
+    "test": "echo \"Error: no test specified\" && exit 0"
   },
   "repository": {
     "type": "git",
@@ -23,9 +23,9 @@
   },
   "homepage": "https://github.com/Hemisphere-Project/hartnet.js#readme",
   "dependencies": {
-    "@hibas123/nodelogging": "^2.4.5",
     "jspack": "0.0.4",
-    "netmask": "^2.0.1"
-  },
-  "devDependencies": {}
+    "netmask": "^2.0.2",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0"
+  }
 }

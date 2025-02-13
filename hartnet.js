@@ -12,15 +12,37 @@ const pino = require('pino')
 
 const swap16 = (val) => { return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF); };
 
+// Make a list of unique ipv4 address, there broadcast addresse and Netmask from cidr
+function getNetworkInfo() {
+  const interfaces = os.networkInterfaces();
+  const networkInfo = [];
+  for (const [interfaceName, addresses] of Object.entries(interfaces))
+      for (const addr of addresses)
+          if (addr.family === 'IPv4' && !addr.internal) {
+              const info = {
+                  ip: addr.address,
+                  mac: addr.mac,
+                  netmask: new Netmask(addr.cidr)
+              };
+              if (!networkInfo.find((n) => n.ip === info.ip)) 
+                networkInfo.push(info);
+          }
+  return networkInfo;
+}
+const INTERFACES = getNetworkInfo();
+
+
 class hartnet {
 
   options = {
     oem: 0x2908,  // OEM code hex
     esta: 0x0000, // ESTA code hex
     port: 6454,   // Port listening for incoming data
-    sName: 'hartnet', // Shortname
+    sName: 'hartnet-node', // Shortname
     lName: 'hartnet - OpenSource ArtNet Transceiver', // Longname
-    log: {name: 'hartnet', level: 'info'}
+    poll_interval: 0,       // Interval for sending ArtPoll
+    poll_to: '0.0.0.0/0',           // Destination for ArtPoll
+    log: {name: 'hartnet', level: 'info'},
   }
 
   constructor(options = {}) {
@@ -33,6 +55,7 @@ class hartnet {
     this.logger = pino(this.options.log, prettystream);
     this.logger.info(`hartnet.js started`)
     this.logger.debug(this.options)
+    this.logger.trace(`Interfaces: ${JSON.stringify(INTERFACES, null, 2)}`)
 
     // error function to call on error to avoid unhandled exeptions e.g. in Node-RED
     this.errFunc = typeof options.errFunc === 'function' ?  options.errFunc : undefined;
@@ -47,10 +70,9 @@ class hartnet {
     this.senders = [];
     // Array containing reference to receiver objects
     this.receivers = [];
-    // Object containing reference to receivers by SubnetUniverseNet
-    this.receiversByPortAddress = {};
-    // Timestamp of last Art-Poll send
-    this.last_poll;
+    // Timestamp of last ArtPollReply send
+    this.last_poll_reply = 0;
+
     // Create listener for incoming data
     if (!Number.isInteger(this.options.port)) this.handleError(new Error('Invalid Port'));
     this.listener4 = dgram.createSocket({
@@ -64,30 +86,73 @@ class hartnet {
     this.listener4.on('error', function (err) {
       this.handleError(new Error('Socket error: ', err));
     });
+
     // Register listening object
     this.listener4.on('message', (msg, rinfo) => {
       this.dataParser(msg, rinfo);
     });
+
     // Start listening
     this.listener4.bind(this.options.port);
     this.logger.debug('Listening on port ' + this.options.port);
+
     // Open Socket for sending broadcast data
     this.socket = dgram.createSocket('udp4');
     this.socket.bind(() => {
       this.socket.setBroadcast(true);
       this.socket_ready = true;
     });
+
+    // Prepare Poll destination: broadcast address from poll_to
+    let p = new Netmask(this.options.poll_to);
+    this.pollTo = p.broadcast;
+    if (this.pollTo == null) {
+      this.logger.warn('Invalid poll_to address: ' + this.options.poll_to, p);
+    }
+
+    // Periodically send ArtPoll to discover devices
+    if (this.options.poll_interval > 0 && this.pollTo != null)
+      setInterval(() => {
+        // discard if last_poll_reply is less than 
+        // this.options.poll_interval/2 ms ago  
+        // it means someone already polled the network
+        if ((new Date().getTime() - this.last_poll_reply) < this.options.poll_interval/2 ){
+          this.logger.debug('Skip ArtPoll, last poll reply was less than ' + this.options.poll_interval/2 + ' ms ago');
+        }
+        else this.ArtPoll()
+      }, this.options.poll_interval);
+
     // Periodically check Controllers
     setInterval(() => {
       if (this.controllers) {
-        this.logger.debug('Check controller alive, count ' + this.controllers.length);
         for (var index = 0; index < this.controllers.length; index++) {
           if ((new Date().getTime() - new Date(this.controllers[index].last_poll).getTime()) > 60000) {
             this.controllers[index].alive = false;
           }
         }
+        this.logger.debug('Check controller alive: ' + this.controllers.filter((c) => c.alive).length + ' / ' + this.controllers.length);
+
+        // this.logger.debug('List target ifaces: ')
+        // let ifaces = []
+        
+        // // List sender interfaces
+        // this.senders.forEach((s) => {
+        //   this.logger.debug('\tSender: ' + JSON.stringify(s.interfaces));
+        //   ifaces.concat(s.interfaces)
+        // });
+
+        // // List receiver interfaces
+        // this.receivers.forEach((r) => {
+        //   this.logger.debug('\tReceiver: ' + JSON.stringify(r.interfaces));
+        //   ifaces.concat(r.interfaces)
+        // });
+
+        // // List merged interfaces
+        // this.logger.debug('\tUnique ifaces: ' + JSON.stringify(ifaces));
+
       }
-    }, 30000);
+    }, 10000);
+
     return this;
   }
 
@@ -121,22 +186,32 @@ class hartnet {
       //
       case 0x5000:
         var p_address = parseInt(jspack.Unpack('B', msg, 14), 10);
+        let data = null;
 
-        if (this.receiversByPortAddress[p_address]
-              && this.receiversByPortAddress[p_address].ipnet.contains(rinfo.address)) 
-        {
-          this.logger.trace('----')
-          this.logger.debug('-> ArtDMX frame received ('+ rinfo.address +') / addr: ' + p_address + ' / len: ' + (msg.length - 18));
-          var data = [];
-          for (var ch = 1; ch <= msg.length - 18; ch++) {
-            data.push(msg.readUInt8(ch + 17, true));
+        // Loop through all receivers and check if packet is for them
+        for(var i in this.receivers) 
+          if (this.receivers[i].acceptPacket(p_address, rinfo)) 
+          {
+            this.logger.trace('----')
+            this.logger.debug('-> ArtDMX frame received ('+ rinfo.address +') / addr: ' + p_address + ' / len: ' + (msg.length - 18));
+            
+            // parse data (if not already done)
+            if (data == null) {
+              data = [];
+              for (var ch = 1; ch <= msg.length - 18; ch++) 
+                data.push(msg.readUInt8(ch + 17, true));
+            } 
+
+            this.logger.trace('\t = Data: ' + data);
+
+            // Transmit data to receiver
+            this.receivers[i].receive(data);
           }
-          this.logger.trace('\t = Data: ' + data);
-          this.receiversByPortAddress[p_address].receive(data);
-        }
-        else {
+
+        // No receiver found
+        if (data == null) {
           this.logger.trace('----')
-          this.logger.trace('-> ArtDMX frame received ('+ rinfo.address +') / addr: ' + p_address + ' / len: ' + (msg.length - 18));
+          this.logger.trace('-> ArtDMX frame received from '+ rinfo.address +' / addr: ' + p_address + ' / len: ' + (msg.length - 18));
           this.logger.trace('\t = no receiver set for this');
         }
         break;
@@ -144,10 +219,13 @@ class hartnet {
       // ArtPoll
       //
       case 0x2000:
+        
+        // Check for minimum size
         if (rinfo.size < 14) {
           this.logger.debug(logMsg, '\t = ArtPoll too small');
           return;
         }
+
         // Parse Protocol version
         var proto = parseInt(jspack.Unpack('B', msg, 10), 10);
         proto += parseInt(jspack.Unpack('B', msg, 11), 10) * 256;
@@ -155,40 +233,46 @@ class hartnet {
           this.logger.debug(logMsg, '\t = invalid OpCode');
           return;
         }
-        this.logger.debug('-> ArtPoll');
+        this.logger.debug('-> ArtPoll received from ' + rinfo.address + ' / Proto: ' + proto);
+
         // Parse TalkToMe
+        var ttm_raw = parseInt(jspack.Unpack('B', msg, 12), 10);
+
+        // Make controller object
         var ctrl = {
           ip: rinfo.address,
           family: rinfo.family,
           last_poll: Date(),
           alive: true,
+          diagnostic_unicast: ((ttm_raw & 0b00001000) > 0),
+          diagnostic_enable: ((ttm_raw & 0b00000100) > 0),
+          unilateral: ((ttm_raw & 0b00000010) > 0),
+          priority: parseInt(jspack.Unpack('B', msg, 13), 10)
         };
-        var ttm_raw = parseInt(jspack.Unpack('B', msg, 12), 10);
-        ctrl.diagnostic_unicast = ((ttm_raw & 0b00001000) > 0);
-        ctrl.diagnostic_enable = ((ttm_raw & 0b00000100) > 0);
-        ctrl.unilateral = ((ttm_raw & 0b00000010) > 0);
-        // Priority
-        ctrl.priority = parseInt(jspack.Unpack('B', msg, 13), 10);
-        // Insert into controller's reference
-        var done = false;
-        for (var index = 0; index < this.controllers.length; ++index) {
-          if (this.controllers[index].ip === rinfo.address) {
-            done = true;
-            this.controllers[index] = ctrl;
-          }
-        }
-        if (done !== true) {
+
+        // Add or update controller
+        var key = this.controllers.findIndex((c) => c.ip === rinfo.address);
+        if (key >= 0) this.controllers[key] = ctrl;
+        else {
           this.controllers.push(ctrl);
+          this.logger.debug('New Controller detected: ' + rinfo.address);
         }
+
+        // Send ArtPollReply
         this.ArtPollReply();
-        // this.logger.debug('\tControllers: ', this.controllers);
         break;
       
       // ArtPollReply
       //
       case 0x2100:
-        // ToDo
-        // this.logger.debug('-> ArtPollReply');
+        this.logger.debug('-> ArtPollReply');
+
+        // Check for minimum size
+        if (rinfo.size < 239) {
+          this.logger.debug(logMsg, '\t = ArtPollReply too small');
+          return;
+        }
+        
         break;
 
       // N.C.
@@ -217,12 +301,15 @@ class hartnet {
    * Returns a new sender instance
    *
    * @param {object} options - Options for the new sender
-   * @returns {sender} - Instance of Sender
+   * @returns {Sender} - Instance of Sender
    */
   newSender(options) {
-    var s = new sender(options, this);
+    var s = new Sender(options, this);
     this.senders.push(s);
-    this.ArtPollReply();
+    // if (this.timeoutReply) clearTimeout(this.timeoutReply);
+    // this.timeoutReply = setTimeout(() => {
+    //   this.ArtPollReply();
+    // }, 2000);
     return s;
   }
 
@@ -230,191 +317,143 @@ class hartnet {
    * Returns a new receiver instance
    *
    * @param {object} options - Options for the new receiver
-   * @returns {receiver} - Instance of Receiver
+   * @returns {Receiver} - Instance of Receiver
    */
   newReceiver(options) {
-    var r = new receiver(options, this);
+    var r = new Receiver(options, this);
     this.receivers.push(r);
-    this.ArtPollReply();
+    // if (this.timeoutReply) clearTimeout(this.timeoutReply);
+    // this.timeoutReply = setTimeout(() => {
+    //   this.ArtPollReply();
+    // }, 2000);
     return r;
+  }
+
+  /**
+   * Builds and sends an ArtPoll-Packet
+   */
+  ArtPoll() {
+    if (!this.socket_ready) return;
+
+    // ArtPoll packet format: ID Int8[8], OpCode Int16 0x2000 (conv. to 0x0020), ProtVer Int16, TalkToMe Int8, Priority Int8
+    const ArtPollFormat = '!7sBHHBB';
+    const ArtPollPacket = Buffer.from(jspack.Pack(
+      ArtPollFormat,
+      ['Art-Net', 0, 0x0020, 14, 0, 0]
+    ));
+
+    this.logger.trace('ArtPoll packet content: ' + ArtPollPacket.toString('hex'));
+
+    // Send UDP
+    this.socket.send(ArtPollPacket, 0, ArtPollPacket.length, this.options.port, this.pollTo, (err) => {
+      if (err) this.handleError(err);
+      this.logger.debug('<- ArtPoll packet sent to ' + this.pollTo + ':' + this.options.port);
+    });
   }
 
   /**
    * Builds and sends an ArtPollReply-Packet
    */
   ArtPollReply() {
-    // this.ip4.forEach((ip) => {
-    //   // BindIndex handles all the different "instance".
-    //   var bindIndex = 1;
-    //   var ArtPollReplyFormat = '!7sBHBBBBHHBBHBBH18s64s64sH4B4B4B4B4B3HB6B4BBB';
-    //   var netSwitch = 0x01;
-    //   var subSwitch = 0x01;
-    //   var status = 0b11010000;
-    //   var stateString = '#0001 [' + ('000' + this.artPollReplyCount).slice(-4) + '] hartnet ArtNet-Transceiver running';
-    //   var sourceip = ip.ip;
-    //   var broadcastip = ip.broadcast;
-
-    //   // Send one packet for each sender
-    //   this.senders.forEach((s) => {
-    //     var portType = 0b01000000;
-    //     var udppacket = Buffer.from(jspack.Pack(
-    //       ArtPollReplyFormat,
-    //       ['Art-Net', 0, 0x0021,
-    //         // 4 bytes source ip + 2 bytes port
-    //         sourceip.split('.')[0], sourceip.split('.')[1],
-    //         sourceip.split('.')[2], sourceip.split('.')[3], this.options.port,
-    //         // 2 bytes Firmware version, netSwitch, subSwitch, OEM-Code
-    //         0x0001, s.net, s.subnet, this.options.oem,
-    //         // Ubea, status1, 2 bytes ESTA
-    //         0, status, swap16(this.options.esta),
-    //         // short name (18), long name (63), stateString (63)
-    //         this.options.sName.substring(0, 16), this.options.lName.substring(0, 63), stateString,
-    //         // 2 bytes num ports, 4*portTypes
-    //         1, portType, 0, 0, 0,
-    //         // 4*goodInput, 4*goodOutput
-    //         0b10000000, 0, 0, 0, 0, 0, 0, 0,
-    //         // 4*SW IN, 4*SW OUT
-    //         s.universe, 0, 0, 0, 0, 0, 0, 0,
-    //         // 5* deprecated/spare, style
-    //         0, 0, 0, 0x01,
-    //         // MAC address
-    //         parseInt(ip.mac.split(':')[0], 16),
-    //         parseInt(ip.mac.split(':')[1], 16),
-    //         parseInt(ip.mac.split(':')[2], 16),
-    //         parseInt(ip.mac.split(':')[3], 16),
-    //         parseInt(ip.mac.split(':')[4], 16),
-    //         parseInt(ip.mac.split(':')[5], 16),
-    //         // BindIP
-    //         sourceip.split('.')[0], sourceip.split('.')[1],
-    //         sourceip.split('.')[2], sourceip.split('.')[3],
-    //         // BindIndex, Status2
-    //         bindIndex, 0b00001110,
-    //       ]));
-    //     // Increase bindIndex
-    //     bindIndex = (bindIndex + 1) % 256;
-    //     // Send UDP
-    //     var client = this.socket;
-    //     client.send(udppacket, 0, udppacket.length, 6454, broadcastip,
-    //       (err) => {
-    //         if (err) this.handleError(err);
-    //         this.logger.debug(`<- ArtPollReply (Sender ${s.net}.${s.subnet}.${s.universe})`);
-    //       });
-    //   });
-
-    //   // Send one package for every receiver
-    //   this.receivers.forEach((r) => {
-    //     var portType = 0b10000000;
-    //     var udppacket = Buffer.from(jspack.Pack(
-    //       ArtPollReplyFormat,
-    //       ['Art-Net', 0, 0x0021,
-    //         // 4 bytes source ip + 2 bytes port
-    //         sourceip.split('.')[0], sourceip.split('.')[1],
-    //         sourceip.split('.')[2], sourceip.split('.')[3], this.options.port,
-    //         // 2 bytes Firmware version, netSwitch, subSwitch, OEM-Code
-    //         0x0001, r.net, r.subnet, this.options.oem,
-    //         // Ubea, status1, 2 bytes ESTA
-    //         0, status, swap16(this.options.esta),
-    //         // short name (18), long name (63), stateString (63)
-    //         this.options.sName.substring(0, 16), this.options.lName.substring(0, 63), stateString,
-    //         // 2 bytes num ports, 4*portTypes
-    //         1, portType, 0, 0, 0,
-    //         // 4*goodInput, 4*goodOutput
-    //         0, 0, 0, 0, 0b10000000, 0, 0, 0,
-    //         // 4*SW IN, 4*SW OUT
-    //         0, 0, 0, 0, r.universe, 0, 0, 0,
-    //         // 5* deprecated/spare, style
-    //         0, 0, 0, 0x01,
-    //         // MAC address
-    //         parseInt(ip.mac.split(':')[0], 16),
-    //         parseInt(ip.mac.split(':')[1], 16),
-    //         parseInt(ip.mac.split(':')[2], 16),
-    //         parseInt(ip.mac.split(':')[3], 16),
-    //         parseInt(ip.mac.split(':')[4], 16),
-    //         parseInt(ip.mac.split(':')[5], 16),
-    //         // BindIP
-    //         sourceip.split('.')[0], sourceip.split('.')[1],
-    //         sourceip.split('.')[2], sourceip.split('.')[3],
-    //         // BindIndex, Status2
-    //         bindIndex, 0b00001110,
-    //       ]));
-
-    //     // Increase bindIndex
-    //     bindIndex = (bindIndex + 1) % 256;
-
-    //     // Send UDP
-    //     var client = this.socket;
-    //     client.send(udppacket, 0, udppacket.length, 6454, broadcastip,
-    //       (err) => {
-    //         if (err) this.parent.handleError(err);
-    //         this.logger.debug(`<- ArtPollReply (Receiver ${r.net}.${r.subnet}.${r.universe})`);
-    //       });
-    //   });
-
-    //   if ((this.senders.length + this.receivers.length) < 1) {
-    //     // No senders and receivers available, propagate as "empty"
-    //     var udppacket = Buffer.from(jspack.Pack(
-    //       ArtPollReplyFormat,
-    //       ['Art-Net', 0, 0x0021,
-    //         // 4 bytes source ip + 2 bytes port
-    //         sourceip.split('.')[0], sourceip.split('.')[1],
-    //         sourceip.split('.')[2], sourceip.split('.')[3], this.options.port,
-    //         // 2 bytes Firmware version, netSwitch, subSwitch, OEM-Code
-    //         0x0001, netSwitch, subSwitch, this.options.oem,
-    //         // Ubea, status1, 2 bytes ESTA
-    //         0, status, swap16(this.options.esta),
-    //         // short name (18), long name (63), stateString (63)
-    //         this.options.sName.substring(0, 16), this.options.lName.substring(0, 63), stateString,
-    //         // 2 bytes num ports, 4*portTypes
-    //         0, 0, 0, 0, 0,
-    //         // 4*goodInput, 4*goodOutput
-    //         0, 0, 0, 0, 0, 0, 0, 0,
-    //         // 4*SW IN, 4*SW OUT
-    //         0, 0, 0, 0, 0, 0, 0, 0,
-    //         // 5* deprecated/spare, style
-    //         0, 0, 0, 0x01,
-    //         // MAC address
-    //         parseInt(ip.mac.split(':')[0], 16),
-    //         parseInt(ip.mac.split(':')[1], 16),
-    //         parseInt(ip.mac.split(':')[2], 16),
-    //         parseInt(ip.mac.split(':')[3], 16),
-    //         parseInt(ip.mac.split(':')[4], 16),
-    //         parseInt(ip.mac.split(':')[5], 16),
-    //         // BindIP
-    //         sourceip.split('.')[0], sourceip.split('.')[1],
-    //         sourceip.split('.')[2], sourceip.split('.')[3],
-    //         // BindIndex, Status2
-    //         1, 0b00001110,
-    //       ]));
-
-    //     this.logger.debug('Packet content: ' + udppacket.toString('hex'));
-
-    //     // Send UDP
-    //     var client = this.socket;
-    //     client.send(udppacket, 0, udppacket.length, 6454, broadcastip,
-    //       (err) => {
-    //         if (err) this.parent.handleError(err);
-    //         this.logger.debug('<- ArtPollReply (Empty)');
-    //       });
-    //   }
-    // });
-    // this.artPollReplyCount = (this.artPollReplyCount + 1) % 10000;
+    const ArtPollReplyFormat = '!7sBHBBBBHHBBHBBH18s64s64sH4B4B4B4B4B3HB6B4BBB';
+    const stateString = '#0001 [' + ('000' + this.artPollReplyCount).slice(-4) + '] hartnet ArtNet-Transceiver running';
+    
+    const createPacket = (iface, devices) => {
+      const basePacket = [
+        'Art-Net', 0, 0x0021,
+        ...iface.ip.split('.').map(i => parseInt(i)),
+        this.options.port,
+        0x0001, 0, 0, this.options.oem,
+        0, 0b11010000, swap16(this.options.esta),
+        this.options.sName.substring(0, 16), this.options.lName.substring(0, 63), stateString,
+        devices.length, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0x01,
+        ...iface.mac.split(':').map(i => parseInt(i, 16)),
+        ...iface.ip.split('.').map(i => parseInt(i)),
+        1, 0b00001110,
+      ];
+  
+      basePacket[10] = devices[0].options.net;
+      basePacket[11] = devices[0].options.subnet;
+  
+      let portTypes = 0;
+      let goodInput = 0;
+      let goodOutput = 0;
+      let swIn = 0;
+      let swOut = 0;
+  
+      devices.forEach((device, index) => {
+        const isSender = device instanceof Sender;
+        portTypes |= (isSender ? 0b01000000 : 0b10000000) << index;
+        goodOutput |= (isSender ? 0b10000000 : 0) << index;
+        goodInput |= (!isSender ? 0b10000000 : 0) << index;
+        if (isSender) {
+          swOut |= device.universe << (index * 8);
+        } else {
+          swIn |= device.universe << (index * 8);
+        }
+      });
+  
+      basePacket[18] = portTypes;
+      basePacket[22] = goodOutput;
+      basePacket[26] = goodInput;
+      basePacket[30] = swOut & 0xFF;
+      basePacket[31] = (swOut >> 8) & 0xFF;
+      basePacket[32] = (swOut >> 16) & 0xFF;
+      basePacket[33] = (swOut >> 24) & 0xFF;
+      basePacket[34] = swIn & 0xFF;
+      basePacket[35] = (swIn >> 8) & 0xFF;
+      basePacket[36] = (swIn >> 16) & 0xFF;
+      basePacket[37] = (swIn >> 24) & 0xFF;
+  
+      return Buffer.from(jspack.Pack(ArtPollReplyFormat, basePacket));
+    };
+  
+    // Group devices by interface, net, and subnet
+    const groupedDevices = new Map();
+    [...this.senders, ...this.receivers].forEach(device => {
+      device.interfaces.forEach(iface => {
+        const key = `${iface.ip}-${device.options.net}-${device.options.subnet}`;
+        if (!groupedDevices.has(key)) {
+          groupedDevices.set(key, { iface, net: device.options.net, subnet: device.options.subnet, devices: [] });
+        }
+        groupedDevices.get(key).devices.push(device);
+      });
+    });
+  
+    // Send one packet for each group
+    for (const { iface, net, subnet, devices } of groupedDevices.values()) {
+      const broadcastip = iface.netmask.broadcast;
+      const udppacket = createPacket(iface, devices);
+      this.socket.send(udppacket, 0, udppacket.length, 6454, broadcastip, (err) => {
+        if (err) this.handleError(err);
+        this.logger.debug(`<- ArtPollReply (${devices.length} devices, Net: ${net}, Subnet: ${subnet}) to ${broadcastip}`);
+      });
+    }
+  
+    this.artPollReplyCount = (this.artPollReplyCount + 1) % 10000;
+    this.last_poll_reply = new Date().getTime();
   }
 }
 
 /**
  * Class representing a sender
  */
-class sender {
+class Sender {
   
   options = {
     net: 0,
     subnet: 0,
     universe: 0,
     to: '255.255.255.255',
-    port: 6454,
     broadcast: false,
+    port: 6454,
     base_refresh_interval: 1000
   }
+
+  interfaces = []
 
   constructor(opt, parent) 
   {
@@ -444,27 +483,28 @@ class sender {
     this.values = new Array(512).fill(0);
 
     // Find IP destination
-    // Get all network interfaces
-    var interfaces = os.networkInterfaces();
-    this.ip4;
-
+    // Get corresponding interfaces
     if (this.options.to === '255.255.255.255') {
       this.ip4 = this.options.to
       this.options.broadcast = true;
+      this.interfaces = INTERFACES.slice();
     }
-    else 
-      Object.keys(interfaces).forEach((key) => {
-        interfaces[key].forEach((val) => {
-          if (val.family === 'IPv4') {
-            var netmask = new Netmask(val.cidr);
-            if (netmask.contains(this.options.to)) { 
-              if (this.options.to == netmask.broadcast) this.options.broadcast = true;
-              if (this.options.broadcast) this.ip4 = netmask.broadcast;
-              else this.ip4 = this.options.to;
-            }
-          }
-        });
-      });
+    else {
+      for(var iface of INTERFACES) {
+  
+        if (iface.netmask.contains(this.options.to)) {
+          if (this.options.to == iface.netmask.broadcast) this.options.broadcast = true;
+          if (this.options.broadcast && iface.netmask.broadcast) this.ip4 = iface.netmask.broadcast;
+          else this.ip4 = this.options.to;
+          this.interfaces.push(iface);
+        }
+      }
+    }
+
+    // If no interface found, throw warning
+    if (this.interfaces.length < 1) {
+      this.parent.logger.warn('Sender: No matching interface found for '+this.options.to);
+    }
     
     // Create Socket
     this.socket = dgram.createSocket('udp4');
@@ -505,9 +545,9 @@ class sender {
     this.parent.logger.trace('----');
     this.parent.logger.trace('ArtDMX frame prepared for ' + this.port_address);
     this.parent.logger.trace('Packet content: ' + udppacket.toString('hex'));
+    
     // Send UDP
-    var client = this.socket;
-    client.send(udppacket, 0, udppacket.length, this.options.port, this.ip4,
+    this.socket.send(udppacket, 0, udppacket.length, this.options.port, this.ip4,
       (err) => {
         if (err) this.parent.handleError(err);
         this.parent.logger.debug('<- ArtDMX frame sent to ' + this.ip4 + ':' + this.options.port);
@@ -594,7 +634,7 @@ class sender {
 /**
  *  Object representing a receiver-instance
  */
-class receiver extends EventEmitter {
+class Receiver extends EventEmitter {
 
   options = {
     from: null,
@@ -602,6 +642,8 @@ class receiver extends EventEmitter {
     subnet: 0,
     universe: 0,
   }
+
+  interfaces = []
 
   constructor(opt, parent) {
     super();
@@ -629,17 +671,32 @@ class receiver extends EventEmitter {
     // ip subnet finder
     this.ipnet = new Netmask('0.0.0.0/0');  // default: listen to all IPs
     if (this.options.from != null) {
-      if (this.options.from.indexOf('/') < 0) this.options.from += '/32'; // if no subnet mask is given, assume /32 (exact match)
+      if (this.options.from.indexOf('/') < 0) {
+        this.options.from += '/32'; // if no subnet mask is given, assume /32 (exact match)
+        this.parent.logger.debug('Receiver: No subnet mask given, assuming '+this.options.from+' (exact match)');
+      }
       this.ipnet = new Netmask(this.options.from)
     }
 
-    // Register receiver
-    parent.receiversByPortAddress[this.port_address] = this;
+    // Matching interfaces
+    for(var iface of INTERFACES) 
+      if (this.ipnet.contains(iface.ip)) this.interfaces.push(iface);
+
+    // If no interface found, throw warning
+    if (this.interfaces.length < 1)
+      this.parent.logger.warn('Receiver: No matching interface found for '+this.options.from);
 
     // Initialize values
     this.values = new Array(512).fill(0);
     
     this.parent.logger.debug(`RECEIVER started: ${JSON.stringify(this.options)}`);
+  }
+
+  /**
+   * Check if packet this packet is for this receiver
+   */
+  acceptPacket(p_address, rinfo) {
+    return (p_address == this.port_address) && this.ipnet.contains(rinfo.address);
   }
 
   /**
@@ -653,7 +710,6 @@ class receiver extends EventEmitter {
   }
 }
 
+
 // Export hartnet
-module.exports = {
-  hartnet,
-};
+module.exports = hartnet;

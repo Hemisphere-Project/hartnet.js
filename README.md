@@ -1,7 +1,7 @@
 # hartnet.js
 
 hartnet.js is an ArtNet-DMX sender and receiver for nodejs
-hartnet.js is a fork from [dmxnet](https://github.com/margau/dmxnet).
+hartnet.js is forked from [dmxnet](https://github.com/margau/dmxnet).
 
 ## Features
 
@@ -9,7 +9,8 @@ hartnet.js is a fork from [dmxnet](https://github.com/margau/dmxnet).
 - Use multiple senders with different Net, Subnet and Universe-Settings
 - Receive ArtNet-Data
 - Use multiple receivers with different Net, Subnet and Universe
-- Receive ArtPoll and send ArtPollReply (hartnet is found by other software, e.g. [DMX-Workshop](https://art-net.org.uk/resources/dmx-workshop/))
+- Receive ArtPoll and send ArtPollReply
+
 
 ## Installation
 
@@ -32,19 +33,21 @@ var hartnet=require('hartnet');
 **Create new hartnet object:**
 
 ```javascript
-var artnet = new hartnet.hartnet(options);
+var hub = new hartnet(options);
 ```
 
 Options:
 
 ```javascript
 {
-  log: { level: 'info' }, // Winston logger options
-  oem: 0, // OEM Code from artisticlicense, default to hartnet OEM.
-  esta: 0, // ESTA Manufacturer ID from https://tsp.esta.org, default to ESTA/PLASA (0x0000)
-  sName: "Text", // 17 char long node description, default to "hartnet"
-  lName: "Long description", // 63 char long node description, default to "hartnet - OpenSource ArtNet Transceiver"
-  log: {name: 'hartnet', files: false} // Logging Options, see https://www.npmjs.com/package/@hibas123/nodelogging#setup
+  oem: 0,                     // OEM Code from artisticlicense, default to hartnet OEM.
+  esta: 0,                    // ESTA Manufacturer ID from https://tsp.esta.org, default to ESTA/PLASA (0x0000)
+  sName: "hartnet-node",      // 17 char long node description, default to "hartnet-node"
+  lName: "Long description",  // 63 char long node description, default to "hartnet - OpenSource ArtNet Transceiver"
+  port: 6454,                 // UDP Port, default 6454
+  poll_interval: 0,           // ArtPoll send interval (ms), default 0 (=disabled)
+  poll_to: '0.0.0.0/0'        // ArtPoll ip domain in CIDR format, default 0.0.0.0/0 (all)
+  log: {name: 'hartnet', level: 'info'} // Logging Options, see https://github.com/pinojs/pino-pretty#options
 }
 ```
 
@@ -66,19 +69,21 @@ trough ArtPoll.**
 **Create new sender object:**
 
 ```javascript
-var sender=hartnet.newSender(options);
+var sender=hub.newSender(options);
 ```
 
 Options:
 
 ```javascript
 {
-  ip: "127.0.0.1", //IP to send to, default 255.255.255.255
-  subnet: 0, //Destination subnet, default 0
-  universe: 0, //Destination universe, default 0
-  net: 0, //Destination net, default 0
-  port: 6454, //Destination UDP Port, default 6454
-  base_refresh_interval: 1000 // Default interval for sending unchanged ArtDmx
+  to: "255.255.255.255",  // IP to send to, can be broadcast or unicast, default 255.255.255.255
+  broadcast: false,       // autodetected from 'to' ip, default false (=autodetect)
+                          // If forced to true, will try to replace 'to' with corresponding domain broadcast ip
+  universe: 0,            // Destination universe, default 0
+  subnet: 0,              // Destination subnet, default 0
+  net: 0,                 // Destination net, default 0
+  port: 6454,             // Destination UDP Port, default 6454
+  base_refresh_interval: 1000 // Default interval for sending unchanged ArtDmx (ms), default 1000
 }
 ```
 
@@ -135,16 +140,17 @@ Resets all channels of this sender object to zero.
 **Create a new receiver-instance:**
 
 ```javascript
-var receiver=hartnet.newReceiver(options);
+var receiver=hub.newReceiver(options);
 ```
 
 Options:
 
 ```javascript
 {
-  subnet: 0, //Destination subnet, default 0
-  universe: 0, //Destination universe, default 0
-  net: 0, //Destination net, default 0
+  from: '0.0.0.0/0',  // Filters from, use CIDR notation, default 0.0.0.0/0 (all)
+  universe: 0,        // Destination universe, default 0
+  subnet: 0,          // Destination subnet, default 0
+  net: 0,             // Destination net, default 0
 }
 ```
 
@@ -156,9 +162,9 @@ receiver.on('data', function(data) {
 });
 ```
 
-The receiver is emits an "data"-event each time new values have arrived.
+The receiver is emits a "data" event each time new values have arrived.
 
-The current values are stored inside the `receiver.values`-array for polling.
+The current values are stored inside the `receiver.values` array for polling.
 
 ## ToDo:
 

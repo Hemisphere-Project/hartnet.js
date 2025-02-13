@@ -3,7 +3,7 @@
 var hartnet = require('../hartnet.js');
 
 // Create new hartnet instance
-var artnet = new hartnet.hartnet({
+var hub = new hartnet({
   log: {
     name: "hartnet-tx",
     level: "debug"
@@ -11,8 +11,8 @@ var artnet = new hartnet.hartnet({
 });
 
 // Create new Sender instance
-var sender = artnet.newSender({
-  to: '192.168.1.0',
+var sender = hub.newSender({
+  to: '10.2.0.0',
   broadcast: true,
   universe: 0,
   subnet: 0,

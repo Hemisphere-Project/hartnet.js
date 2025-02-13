@@ -2,7 +2,7 @@
 var hartnet = require('../hartnet.js');
 
 // Create new hartnet instance
-var artnet = new hartnet.hartnet({
+var hub = new hartnet({
   log: {
     name: "hartnet-rx",
     level: "debug"
@@ -10,10 +10,10 @@ var artnet = new hartnet.hartnet({
 });
 
 // Create a new receiver instance, listening for universe 0 on net 0 subnet 0
-var receiver = artnet.newReceiver({
-  from: '192.168.1.0/24',
-  subnet: 0,
+var receiver = hub.newReceiver({
+  from: '10.2.0.0/16',
   universe: 0,
+  subnet: 0,
   net: 0,
 });
 

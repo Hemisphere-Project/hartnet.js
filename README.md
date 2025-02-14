@@ -42,12 +42,11 @@ Options:
 {
   oem: 0,                     // OEM Code from artisticlicense, default to hartnet OEM.
   esta: 0,                    // ESTA Manufacturer ID from https://tsp.esta.org, default to ESTA/PLASA (0x0000)
-  sName: "hartnet-node",      // 17 char long node description, default to "hartnet-node"
-  lName: "Long description",  // 63 char long node description, default to "hartnet - OpenSource ArtNet Transceiver"
+  name: "hartnet-node",       // 17 char long node description, default to "hartnet-node"
   port: 6454,                 // UDP Port, default 6454
   poll_interval: 0,           // ArtPoll send interval (ms), default 0 (=disabled)
   poll_to: '0.0.0.0/0'        // ArtPoll ip domain in CIDR format, default 0.0.0.0/0 (all)
-  log: {name: 'hartnet', level: 'info'} // Logging Options, see https://github.com/pinojs/pino-pretty#options
+  log_level: 'info'           // Log level (trace/debug/info/..)
 }
 ```
 

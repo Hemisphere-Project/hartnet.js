@@ -4,10 +4,8 @@ var hartnet = require('../hartnet.js');
 
 // Create new hartnet instance
 var hub = new hartnet({
-  log: {
-    name: "hartnet-tx",
-    level: "debug"
-  }
+  name: "hartnet-tx",
+  log_level: "debug"
 });
 
 // Create new Sender instance

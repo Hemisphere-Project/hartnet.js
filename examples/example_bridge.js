@@ -2,14 +2,16 @@
 // Load hartnet as libary
 var hartnet = require('../hartnet.js');
 
+const uplink = '10.2.0.0/16'    // 10.0.0.0/16
+const downlink = '10.2.0.0/16'  // 2.0.0.0/8
+
 // Create new hartnet instance
+//
 var hub = new hartnet({
-  log: {
-    name: "hartnet-bridge",
-    level: "debug"
-  },
+  name: "hartnet-bridge",
+  log_level: "trace",
   poll_interval: 3000,
-  poll_to: '10.2.0.0/16'
+  poll_to: downlink
 });
 
 var RECEIVERS = [];
@@ -19,11 +21,10 @@ var SENDERS = [];
 // Prepare senders, which will be populated when actually discovering devices
 // Receivers will forward data to all senders in the same universe
 //
-for (var i = 0; i < 16; i++) 
+for (var i = 0; i < 1; i++) 
 {
-    
     let receiver = hub.newReceiver({
-        from: '10.2.0.0/16',
+        from: uplink,
         universe: i
     });
     
@@ -36,4 +37,12 @@ for (var i = 0; i < 16; i++)
     }) 
 }
 
+// Watch hub for node-update
+//
+hub.on('node-update', (node) => {
+    console.log('Node update:');
+    for(var key in node.inPorts) {
+        console.log('  Port:', key, '->', node.inPorts[key]);
+    }
+});
 

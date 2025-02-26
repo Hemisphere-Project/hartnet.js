@@ -12,7 +12,7 @@ var hub = new hartnet({
 var sender = hub.newSender({
   to: '10.2.0.0',
   broadcast: true,
-  universe: 0,
+  universe: 2,
   subnet: 0,
   net: 0,
 });
@@ -24,14 +24,20 @@ sender.setChannel(255, 128);
 // Fill Channels
 sender.fillChannels(1, 20, 250);
 
-// Prepare Channel 26+27 after 10 s and send next secondly
-setTimeout(function() {
-  sender.prepChannel(25, 255);
-  sender.prepChannel(26, 255);
-  sender.transmit();
-}, 10000);
+// // Prepare Channel 26+27 after 10 s and send next secondly
+// setTimeout(function() {
+//   sender.prepChannel(25, 255);
+//   sender.prepChannel(26, 255);
+//   sender.transmit();
+// }, 10000);
 
-// Stop sender after 5 seconds
-setTimeout(function() {
-  sender.stop();
-}, 50000);
+// // Stop sender after 5 seconds
+// setTimeout(function() {
+//   sender.stop();
+// }, 50000);
+
+var v = 0;
+setInterval(() => {
+  sender.fillChannels(1, 20, v);
+  v = (v+1)%256;
+}, 50);

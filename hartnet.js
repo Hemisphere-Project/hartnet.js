@@ -14,6 +14,10 @@ const prettystream = require('pino-pretty')({}) // https://github.com/pinojs/pin
 const pino = require('pino')
 
 const swap16 = (val) => { return ((val & 0xFF) << 8) | ((val >> 8) & 0xFF); };
+const getUniverse = (swIn, i) => { 
+  const reversedIndex = 3 - i;  // Reverse the index
+  return (swIn >>> (28 - reversedIndex * 4)) & 0x0F;
+}
 
 // Make a list of unique ipv4 address, there broadcast addresse and Netmask from cidr
 function getNetworkInfo() {
@@ -83,7 +87,7 @@ class hartnet extends EventEmitter {
 
     // Create listener for incoming data
     if (!Number.isInteger(this.options.port)) this.handleError(new Error('Invalid Port'));
-    this.listener4 = dgram.createSocket({
+    this.hubsocket = dgram.createSocket({
       type: 'udp4',
       reuseAddr: true,
     });
@@ -91,25 +95,22 @@ class hartnet extends EventEmitter {
     // ToDo: IPv6
     // ToDo: Multicast
     // Catch Socket errors
-    this.listener4.on('error', function (err) {
+    this.hubsocket.on('error', function (err) {
       this.handleError(new Error('Socket error: ', err));
     });
 
     // Register listening object
-    this.listener4.on('message', (msg, rinfo) => {
+    this.hubsocket.on('message', (msg, rinfo) => {
       this.dataParser(msg, rinfo);
     });
 
     // Start listening
-    this.listener4.bind(this.options.port);
-    this.logger.debug('Listening on port ' + this.options.port);
-
-    // Open Socket for sending broadcast data
-    this.socket = dgram.createSocket('udp4');
-    this.socket.bind(() => {
-      this.socket.setBroadcast(true);
+    this.hubsocket.bind(this.options.port, () => {
+      this.hubsocket.setBroadcast(true);
       this.socket_ready = true;
+      this.logger.debug('Hub socket ready, listening on port ' + this.options.port);
     });
+    // this.logger.debug('Listening on port ' + this.options.port);
 
     // Prepare Poll destination: broadcast address from poll_to
     let p = new Netmask(this.options.poll_to);
@@ -124,10 +125,12 @@ class hartnet extends EventEmitter {
         // discard if last_poll_reply is less than 
         // this.options.poll_interval/2 ms ago  
         // it means someone already polled the network
-        if ((new Date().getTime() - this.last_poll_reply) < this.options.poll_interval/2 ){
-          this.logger.debug('Skip ArtPoll, last poll reply was less than ' + this.options.poll_interval/2 + ' ms ago');
-        }
-        else this.ArtPoll()
+        // if ((new Date().getTime() - this.last_poll_reply) < this.options.poll_interval/2 ){
+        //   this.logger.debug('Skip ArtPoll, last poll reply was less than ' + this.options.poll_interval/2 + ' ms ago');
+        // }
+        // else 
+        this.ArtPoll()
+        
       }, this.options.poll_interval);
 
     // Periodically check Controllers / Nodes
@@ -152,7 +155,7 @@ class hartnet extends EventEmitter {
         }
       }
       this.logger.debug('Check node alive: ' + this.nodes.size);
-      this.logger.trace('Nodes: ' + JSON.stringify(this.nodes.values(), null, 2));
+      this.logger.trace(Array.from(this.nodes));
 
     }, 5000);
 
@@ -288,45 +291,54 @@ class hartnet extends EventEmitter {
         const apr = {
           ip: rinfo.address,
           mac: msg.slice(201, 207).toString('hex').match(/.{2}/g).join(':'),
-          shortName: unpacked[15].replace(/\0+$/, ''),
-          longName: unpacked[16].replace(/\0+$/, ''),
-          nodeReport: unpacked[17].replace(/\0+$/, ''),
-          numPorts: unpacked[18],
-          portTypes: (unpacked[19] << 24) | (unpacked[20] << 16) | (unpacked[21] << 8) | unpacked[22],
-          goodInput: (unpacked[23] << 24) | (unpacked[24] << 16) | (unpacked[25] << 8) | unpacked[26],
-          goodOutput: (unpacked[27] << 24) | (unpacked[28] << 16) | (unpacked[29] << 8) | unpacked[30],
-          swIn: (unpacked[31] << 24) | (unpacked[32] << 16) | (unpacked[33] << 8) | unpacked[34],
-          swOut: (unpacked[35] << 24) | (unpacked[36] << 16) | (unpacked[37] << 8) | unpacked[38],
-          net: unpacked[10],
-          subNet: unpacked[11],
-          bindIndex: unpacked[unpacked.length - 1],  // Last element is BindIndex
+          shortName: msg.slice(26, 44).toString().replace(/\0+$/, ''),
+          longName: msg.slice(44, 108).toString().replace(/\0+$/, ''),
+          nodeReport: msg.slice(108, 172).toString().replace(/\0+$/, ''),
+          numPorts: msg.readUInt16BE(172),
+          portTypes: msg.readUInt32BE(174),
+          goodInput: msg.readUInt32BE(178),
+          goodOutput: msg.readUInt32BE(182),
+          swIn: msg.slice(186, 190),
+          swOut: msg.slice(190, 194),
+          net: msg[18],
+          subNet: msg[19],
+          bindIndex: msg[206],
           inPorts: [],
           outPorts: []
         };
 
         // Check if from myself
-        if (INTERFACES.find((i) => i.ip === apr.ip)) 
+        if (INTERFACES.find((i) => i.ip === apr.ip)) {
           if (apr.shortName == this.options.sName && apr.longName == this.options.lName)
           {
             this.logger.trace('-> ArtPollReply from myself');
             return;
           }
+        }
 
-        // console.log('ArtPollReply:', apr, rinfo);
+        // uid
+        apr.uid = apr.mac+' '+apr.longName
+
+        // write swin in byte groups with (decimal) value like 00000000 (0) 00000000 (0) 00000000 (0) 00000000 (0)
+        // console.log('swIn:', apr.swIn.toString(2))
+        // console.log('swIn:', apr.swIn.toString(2).match(/.{8}/g).join(' '));
+        // console.log('swIn:', apr.swIn, apr.swIn >>> (28 - 0*4), apr.swIn.toString(2))
 
         // Parse port information
         for (let i = 0; i < Math.min(apr.numPorts, 4); i++) {
-          const portType = (apr.portTypes >> (i * 8)) & 0xFF;
-          const goodInput = (apr.goodInput >> i) & 0x01;
-          const goodOutput = (apr.goodOutput >> i) & 0x01;
+          const portType = (apr.portTypes >> (24 - i * 8)) & 0xFF;
+          const goodInput = (apr.goodInput >> (31 - i)) & 0x01; 
+          const goodOutput = (apr.goodOutput >> (31 - i)) & 0x01;
+          const swIn = apr.swIn[i];
+          const swOut = apr.swOut[i];
 
           if (portType & 0x80) {  // Input port
             apr.inPorts.push({
               net: apr.net,
               subnet: apr.subNet,
-              universe: (apr.swIn >> (28 - i * 4)) & 0x0F,
+              universe: swIn,
               ip: apr.ip,
-              portNumber: apr.bindIndex * 4 + i,
+              portNumber: i+1,
               isGood: goodInput === 1
             });
           }
@@ -334,26 +346,27 @@ class hartnet extends EventEmitter {
             apr.outPorts.push({
               net: apr.net,
               subnet: apr.subNet,
-              universe: (apr.swOut >> (28 - i * 4)) & 0x0F,
+              universe: swOut,
               ip: apr.ip,
-              portNumber: apr.bindIndex * 4 + i,
+              portNumber: i+1,
               isGood: goodOutput === 1
             });
           }
         }
+        // console.log('ArtPollReply:', apr, rinfo);
 
         // Find or create Node and update
-        let node = this.nodes.get(apr.mac);
+        let node = this.nodes.get(apr.uid);
         if (!node) {
-          node = new Node(apr.mac);
-          this.nodes.set(apr.mac, node);
-          this.logger.debug('New Node detected: ' + apr.ip + ' (' + apr.mac + ')');
+          node = new Node(apr.uid);
+          this.nodes.set(apr.uid, node);
+          this.logger.debug('New Node detected: ' + apr.ip + ' (' + apr.uid + ')');
         }
         let didChange = node.updateFromArtPollReply(apr);
         if (didChange) this.emit('node-update', node);
 
-        this.logger.debug(`-> ArtPollReply from ${apr.shortName} (BindIndex: ${apr.bindIndex})`);
-        break;
+        this.logger.debug(`-> ArtPollReply from ${apr.shortName} ${apr.ip} (BindIndex: ${apr.bindIndex})`);
+      break;
 
       // N.C.
       //
@@ -423,7 +436,7 @@ class hartnet extends EventEmitter {
     ));
 
     // Send UDP
-    this.socket.send(ArtPollPacket, 0, ArtPollPacket.length, this.options.port, this.pollTo, (err) => {
+    this.hubsocket.send(ArtPollPacket, 0, ArtPollPacket.length, 6454, this.pollTo, (err) => {
       if (err) this.handleError(err);
       this.logger.debug('<- ArtPoll packet sent to ' + this.pollTo + ':' + this.options.port);
     });
@@ -433,72 +446,77 @@ class hartnet extends EventEmitter {
    * Builds and sends an ArtPollReply-Packet
    */
   ArtPollReply() {
-    const ArtPollReplyFormat = '!7sBHBBBBHHBBHBBH18s64s64sH4B4B4B4B4B3HB6B4BBBB';
+    const ArtPollReplyFormat = '!7sBHBBBBHHBBHBBH18s64s64sH4B4B4B4B4B6BB6B4BBB4BB6B15B';
     const stateString = '#0001 [' + ('000' + this.artPollReplyCount).slice(-4) + '] hartnet ArtNet-Transceiver running';
     
-    const createPacket = (iface, devices, bindIndex) => {
-      const basePacket = [
-        'Art-Net', 0, 0x0021,
-        ...iface.ip.split('.').map(i => parseInt(i)),
-        this.options.port,
-        0x0001, 0, 0, this.options.oem,
-        0, 0b11010000, swap16(this.options.esta),
-        this.options.sName.substring(0, 16), this.options.lName.substring(0, 63), stateString,
-        Math.min(devices.length, 4), 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0,  // Changed 0x01 to 0 for Spare field
-        ...iface.mac.split(':').map(i => parseInt(i, 16)),
-        ...iface.ip.split('.').map(i => parseInt(i)),
-        1, 0b00001110, bindIndex,
-      ];
-  
-      basePacket[10] = devices[0].options.net;
-      basePacket[11] = devices[0].options.subnet;
-  
-      let portTypes = 0;
-      let goodInput = 0;
-      let goodOutput = 0;
-      let swIn = 0;
-      let swOut = 0;
-  
-      devices.slice(0, 4).forEach((device, index) => {
-        const isSender = device instanceof Sender;
-        portTypes |= (isSender ? 0x40 : 0x80) << (index * 8);
-        if (isSender) {
-          goodOutput |= 0x01 << index;
-          swOut |= (device.options.universe & 0x0F) << (index * 4);
-        } else {
-          goodInput |= 0x01 << index;
-          swIn |= (device.options.universe & 0x0F) << (index * 4);
-        }
-      });
-  
-      basePacket[19] = (portTypes >> 24) & 0xFF;
-      basePacket[20] = (portTypes >> 16) & 0xFF;
-      basePacket[21] = (portTypes >> 8) & 0xFF;
-      basePacket[22] = portTypes & 0xFF;
-      basePacket[23] = goodInput & 0xFF;  // Changed to only use the lowest byte
-      basePacket[24] = 0;
-      basePacket[25] = 0;
-      basePacket[26] = 0;
-      basePacket[27] = goodOutput & 0xFF;  // Changed to only use the lowest byte
-      basePacket[28] = 0;
-      basePacket[29] = 0;
-      basePacket[30] = 0;
-      basePacket[31] = swIn & 0xFF;
-      basePacket[32] = (swIn >> 8) & 0xFF;
-      basePacket[33] = (swIn >> 16) & 0xFF;
-      basePacket[34] = (swIn >> 24) & 0xFF;
-      basePacket[35] = swOut & 0xFF;
-      basePacket[36] = (swOut >> 8) & 0xFF;
-      basePacket[37] = (swOut >> 16) & 0xFF;
-      basePacket[38] = (swOut >> 24) & 0xFF;
-  
+    const createPacket = (devices, iface, net, subnet, bindIndex) => 
+    {    
+      var portTypes = [0x00, 0x00, 0x00, 0x00]; 
+      var goodInput = [0x00, 0x00, 0x00, 0x00];
+      var goodOutput = [0x00, 0x00, 0x00, 0x00];
+      var goodOutputB = [0x00, 0x00, 0x00, 0x00];
+      var swIN = [0x00, 0x00, 0x00, 0x00];
+      var swOUT = [0x00, 0x00, 0x00, 0x00];
 
-      return Buffer.from(jspack.Pack(ArtPollReplyFormat, basePacket));
+      for(let i = 0; i < devices.length; i++) 
+      {
+
+        if (devices[i] instanceof Sender) {
+          portTypes[i] = 0x40;
+          goodOutput[i] = 0x80;
+          goodOutputB[i] = 0xC0;
+          swOUT[i] = devices[i].options.universe & 0x0F;
+        }
+        else {
+          portTypes[i] = 0x80;
+          goodInput[i] = 0x80;
+          swIN[i] = devices[i].options.universe & 0x0F;
+        }
+
+      }
+
+      var packet = [
+        'Art-Net', 0, 0x0021,
+        // 4 bytes source ip 
+        ...iface.ip.split('.').map(i => parseInt(i)), 
+        // 2 bytes port
+        swap16(this.options.port),
+        // 2 bytes Firmware version, netSwitch, subSwitch, OEM-Code
+        0x0001, net & 0xFF, subnet & 0xFF, this.options.oem,
+        // Ubea, status1, 2 bytes ESTA
+        0, 0b11100000, swap16(this.options.esta),
+        // short name (18)
+        this.options.sName.padEnd(18, '\0').substring(0, 17),
+        // long name (64)
+        this.options.lName.padEnd(64, '\0').substring(0, 63),
+        // NodeReport (64)
+        stateString.padEnd(64, '\0').substring(0, 63),
+        // 2 bytes num ports (max=4), 
+        Math.min(devices.length, 4), 
+        // 4*portTypes, 4*goodInput, 4*goodOutput
+        ...portTypes, ...goodInput, ...goodOutput,
+        // 4*SW IN, 4*SW OUT
+        ...swIN, ...swOUT,
+        // 6*deprecated/spare, style
+        0, 0, 0, 0, 0, 0, 0x01,
+        // MAC address
+        ...iface.mac.split(':').map(i => parseInt(i, 16)),
+        // BindIP
+        ...iface.ip.split('.').map(i => parseInt(i)),
+        // BindIndex, Status2
+        bindIndex & 0xFF, 0b00001100,
+        // GoodOutputB
+        ...goodOutputB,
+        // Status3, Default responder
+        0b00000000, 0, 0, 0, 0, 0, 0,
+        // filler
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ]
+
+      let packedData = jspack.Pack(ArtPollReplyFormat, packet);
+      return Buffer.from(packedData);
     };
-  
+
     // Group devices by interface, net, and subnet
     const groupedDevices = new Map();
     [...this.senders, ...this.receivers].forEach(device => {
@@ -515,11 +533,14 @@ class hartnet extends EventEmitter {
     for (const { iface, net, subnet, devices } of groupedDevices.values()) {
       const broadcastip = iface.netmask.broadcast;
       const packetCount = Math.ceil(devices.length / 4);
+
       
       for (let i = 0; i < packetCount; i++) {
         const packetDevices = devices.slice(i * 4, (i + 1) * 4);
-        const udppacket = createPacket(iface, packetDevices, i);
-        this.socket.send(udppacket, 0, udppacket.length, 6454, broadcastip, (err) => {
+        console.log(packetDevices.map((d) => { return {universe: d.options.universe, isSender: d instanceof Sender} }));
+
+        const udppacket = createPacket(packetDevices, iface, net, subnet, (i+1));
+        this.hubsocket.send(udppacket, 0, udppacket.length, 6454, broadcastip, (err) => {
           if (err) this.handleError(err);
           this.logger.debug(`<- ArtPollReply (${packetDevices.length} ports, BindIndex: ${i}, Net: ${net}, Subnet: ${subnet}) to ${broadcastip}`);
         });
@@ -535,8 +556,8 @@ class hartnet extends EventEmitter {
  * Class representing a Node
  */
 class Node {
-  constructor(mac) {
-    this.mac = mac;  // Unique identifier
+  constructor(uid) {
+    this.uid = uid;  // Unique identifier
     this.ip = null;
     this.shortName = '';
     this.longName = '';
@@ -547,8 +568,8 @@ class Node {
   }
 
   updateFromArtPollReply(data) {
-    // Check mac
-    if (this.mac !== data.mac) return;
+    // Check uid
+    if (this.uid !== data.uid) return;
     
     // copy current data
     const oldData = JSON.stringify(this);
@@ -677,7 +698,7 @@ class Sender {
     this.socket.bind(() => {
         this.socket.setBroadcast( this.options.broadcast );
         this.socket_ready = true;
-      });
+    });
 
     // Start sending
     this.parent.logger.info(`SENDER started: ${JSON.stringify(this.options)}`);
@@ -774,6 +795,20 @@ class Sender {
     }
     this.transmit();
   }
+
+  /*
+    Fill frame
+  */
+  send(data) {
+    if (data.length != 512) {
+      this.handleError(new Error('Data must be 512 bytes long'));
+    }
+    for (var i = 0; i < 512; i++) {
+      this.values[i] = data[i];
+    }
+    this.transmit();
+  }
+    
 
   /**
    * Resets all channels to zero and Transmits

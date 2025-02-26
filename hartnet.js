@@ -241,10 +241,13 @@ class hartnet extends EventEmitter {
         }
 
         // Check origin
-        if (INTERFACES.find((i) => i.ip === rinfo.address))
+        if (INTERFACES.find((i) => i.ip === rinfo.address)) {
           this.logger.trace('-> ArtPoll from myself');
-        else
+          // return;
+        }
+        else {
           this.logger.debug('-> ArtPoll received from ' + rinfo.address + ' / Proto: ' + proto);
+        }
 
         // Parse TalkToMe
         var ttm_raw = parseInt(jspack.Unpack('B', msg, 12), 10);

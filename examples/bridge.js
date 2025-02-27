@@ -14,7 +14,7 @@ const downNet = new Netmask(downlink);
 var hub = new hartnet({
   name: "hartnet-bridge",
   log_level: "info",
-  poll_interval: 3000,
+  poll_interval: 10000,
   poll_to: downlink,
   errFunc: (err) => { console.warn('ERROR:', err); }
 });
@@ -68,8 +68,19 @@ hub.on('remote-input-new', (node, portnumber) => {
         universe: port.universe,
         net: port.net,
         subnet: port.subnet,
-        base_refresh_interval: 0,
+        base_refresh_interval: 0,   // do not auto refresh, only send when data received from uplink
     });
     SENDERS[port.portAddress].push(sender);
 });
+
+
+/// TODO:
+// 3 modes: record, playback, relay
+// default is relay
+
+// if relay => if value of ch511 > 0, start record to preset <value> (if not already recording)
+// if relay => if value of ch511 = 0, stop recording (if recording)
+
+// if keyboard numpad value is received, => playback preset <value> (if not already), (stop relay / stop recording)
+// if value of ch512 > 0, => relay (if not already), start relayin data from uplink (stop playback / stop recording)
 

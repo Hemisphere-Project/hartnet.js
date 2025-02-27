@@ -322,11 +322,6 @@ class hartnet extends EventEmitter {
         // uid
         apr.uid = apr.mac+' '+apr.longName
 
-        // write swin in byte groups with (decimal) value like 00000000 (0) 00000000 (0) 00000000 (0) 00000000 (0)
-        // console.log('swIn:', apr.swIn.toString(2))
-        // console.log('swIn:', apr.swIn.toString(2).match(/.{8}/g).join(' '));
-        // console.log('swIn:', apr.swIn, apr.swIn >>> (28 - 0*4), apr.swIn.toString(2))
-
         // Parse port information
         for (let i = 0; i < Math.min(apr.numPorts, 4); i++) {
           const portType = (apr.portTypes >> (24 - i * 8)) & 0xFF;
@@ -356,14 +351,23 @@ class hartnet extends EventEmitter {
             });
           }
         }
-        // console.log('ArtPollReply:', apr, rinfo);
 
         // Find or create Node and update
-        let node = this.nodes.get(apr.uid);
+        var node = this.nodes.get(apr.uid);
         if (!node) {
           node = new Node(apr.uid);
           this.nodes.set(apr.uid, node);
-          this.logger.debug('New Node detected: ' + apr.ip + ' (' + apr.uid + ')');
+          this.logger.info('New Node detected: ' + apr.ip + ' (' + apr.uid + ')');
+          node.on('input-new', (node, portnumber) => {
+            let port = node.inPorts[portnumber];
+            this.logger.info('\tremote input: ' + node.ip + ' ' + node.shortName + ' (' + port.net + ': ' + port.subnet + ': ' + port.universe + ')');
+            this.emit('remote-input-new', node, portnumber);
+          })
+          node.on('output-new', (node, portnumber) => {
+            let port = node.outPorts[portnumber];
+            this.logger.info('\tremote output: ' + node.ip + ' ' + node.shortName + ' (' + port.net + ': ' + port.subnet + ': ' + port.universe + ')');
+            this.emit('remote-output-new', node, portnumber);
+          }) 
         }
         let didChange = node.updateFromArtPollReply(apr);
         if (didChange) this.emit('node-update', node);
@@ -465,13 +469,13 @@ class hartnet extends EventEmitter {
       {
 
         if (devices[i] instanceof Sender) {
-          portTypes[i] = 0x40;
+          portTypes[i] = 0x80;
           goodOutput[i] = 0x80;
           goodOutputB[i] = 0xC0;
           swOUT[i] = devices[i].options.universe & 0x0F;
         }
         else {
-          portTypes[i] = 0x80;
+          portTypes[i] = 0x40;
           goodInput[i] = 0x80;
           swIN[i] = devices[i].options.universe & 0x0F;
         }
@@ -540,8 +544,6 @@ class hartnet extends EventEmitter {
       
       for (let i = 0; i < packetCount; i++) {
         const packetDevices = devices.slice(i * 4, (i + 1) * 4);
-        console.log(packetDevices.map((d) => { return {universe: d.options.universe, isSender: d instanceof Sender} }));
-
         const udppacket = createPacket(packetDevices, iface, net, subnet, (i+1));
         this.hubsocket.send(udppacket, 0, udppacket.length, 6454, broadcastip, (err) => {
           if (err) this.handleError(err);
@@ -558,8 +560,9 @@ class hartnet extends EventEmitter {
 /**
  * Class representing a Node
  */
-class Node {
+class Node extends EventEmitter {
   constructor(uid) {
+    super();
     this.uid = uid;  // Unique identifier
     this.ip = null;
     this.shortName = '';
@@ -583,8 +586,8 @@ class Node {
     this.shortName = data.shortName;
     
     // Update ports
-    this.updatePorts(data.inPorts, this.inPorts);
-    this.updatePorts(data.outPorts, this.outPorts);
+    this.updateInputs(data.inPorts);
+    this.updateOutputs(data.outPorts);
     
     // Check if something changed
     let didChange = (oldData !== JSON.stringify(this))
@@ -597,17 +600,40 @@ class Node {
     return didChange;
   }
 
-  updatePorts(newPorts, existingPorts) {
+  updateInputs(newPorts) {
     newPorts.forEach(port => {
       if (this.isCompatibleWithLocalInterfaces(port.ip)) {
-        existingPorts[port.portNumber] = {
+        let isNew = !this.inPorts[port.portNumber];
+        let portAddress = (port.net << 8) | (port.subnet << 4) | port.universe;
+        this.inPorts[port.portNumber] = {
           net: port.net,
           subnet: port.subnet,
           universe: port.universe,
           ip: port.ip,
           portNumber: port.portNumber,
+          portAddress: portAddress,
           isGood: port.isGood
         }
+        if (isNew) this.emit('input-new', this, port.portNumber);
+      }
+    });
+  }
+
+  updateOutputs(newPorts) {
+    newPorts.forEach(port => {
+      if (this.isCompatibleWithLocalInterfaces(port.ip)) {
+        let isNew = !this.outPorts[port.portNumber];
+        let portAddress = (port.net << 8) | (port.subnet << 4) | port.universe;
+        this.outPorts[port.portNumber] = {
+          net: port.net, 
+          subnet: port.subnet,
+          universe: port.universe,
+          ip: port.ip,
+          portNumber: port.portNumber,
+          portAddress: portAddress,
+          isGood: port.isGood
+        }
+        if (isNew) this.emit('output-new', this, port.portNumber);
       }
     });
   }
@@ -642,6 +668,7 @@ class Sender {
   }
 
   interfaces = []
+  portAddress = 0
 
   constructor(opt, parent) 
   {
@@ -660,8 +687,8 @@ class Sender {
 
     // Build Subnet/Universe/Net Int16
     this.port_subuni =  (this.options.subnet << 4) | this.options.universe;
-    this.port_address = (this.options.net << 8) | this.port_subuni;
-    if (this.port_address > 32767) {
+    this.portAddress = (this.options.net << 8) | this.port_subuni;
+    if (this.portAddress > 32767) {
       this.handleError(new Error('Invalid Port Address: net * subnet * universe must be smaller than 32768'));
     }
     
@@ -731,7 +758,7 @@ class Sender {
     this.ArtDmxSeq = (this.ArtDmxSeq + 1) % 256;
       
     this.parent.logger.trace('----');
-    this.parent.logger.trace('ArtDMX frame prepared for ' + this.port_address);
+    this.parent.logger.trace('ArtDMX frame prepared for ' + this.portAddress);
     this.parent.logger.trace('Packet content: ' + udppacket.toString('hex'));
     
     // Send UDP
@@ -864,9 +891,9 @@ class Receiver extends EventEmitter {
 
     // Build Subnet/Universe/Net Int16
     this.port_subuni =  (this.options.subnet << 4) | this.options.universe;
-    this.port_address = (this.options.net << 8) | this.port_subuni;
+    this.portAddress = (this.options.net << 8) | this.port_subuni;
 
-    if (this.port_address > 32767) {
+    if (this.portAddress > 32767) {
       this.handleError(new Error('Invalid Port Address: net * subnet * universe must be smaller than 32768'));
     }
 
@@ -898,7 +925,7 @@ class Receiver extends EventEmitter {
    * Check if packet this packet is for this receiver
    */
   acceptPacket(p_address, rinfo) {
-    return (p_address == this.port_address) && this.ipnet.contains(rinfo.address);
+    return (p_address == this.portAddress) && this.ipnet.contains(rinfo.address);
   }
 
   /**

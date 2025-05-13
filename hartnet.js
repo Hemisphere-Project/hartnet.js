@@ -664,7 +664,8 @@ class Sender {
     to: '255.255.255.255',
     broadcast: false,
     port: 6454,
-    base_refresh_interval: 1000
+    base_refresh_interval: 1000,
+    nickname: '',
   }
 
   interfaces = []

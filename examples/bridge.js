@@ -120,7 +120,6 @@ function relay_start() {
     console.log('Relay started');
 }
 function relay_data(universe, data) {
-    if (MODE != RELAY) return;
     if (SENDERS[universe]) 
         SENDERS[universe].forEach((sender) => {
             sender.send(data);
@@ -159,6 +158,9 @@ function rec_data(universe, data) {
     let trame = {'time': Date.now()-modeStart, 'universe': universe, 'data': data};
     modeBuffer.push(trame);
     console.log('\t++ REC\tuniverse:', universe, '\tdata:', dataLog(data))
+
+    // Also relay
+    relay_data(universe, data);
 }
 function rec_stop() {
     if (MODE != RECORD) return;

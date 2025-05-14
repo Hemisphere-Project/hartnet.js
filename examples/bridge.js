@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const Netmask = require('netmask').Netmask;
+const osc = require('node-osc');
 
 // Conf
 const presetPath = '/data/hartnet/presets';
@@ -66,26 +67,23 @@ function dataLog(data) {
 
 // Global 
 function mode_switch(m, preset) {
-    if (m == MODE && preset == PRESET) {
-        // console.log('Already in mode:', m);
-        return;
+    // if (m == MODE && preset == PRESET) {
+    //     console.log('Already in mode:', m);
+    //     return;
+    // }
+
+    if (m == RECORD) rec_start(preset);
+    else if (m == PLAYBACK) play_start(preset);
+    else if (m == RELAY) relay_start();
+    
+    if (m == NONE) {
+        play_stop();
+        rec_stop();
+        relay_stop();
+        MODE = NONE;
     }
 
-    if (MODE == PLAYBACK) play_stop()
-    else if (MODE == RECORD) rec_stop()
-    else if (MODE == RELAY) relay_stop()
-
-    modeStart = Date.now();
-    modeBuffer = [];
-    modeIndex = 0;
-
-    PRESET = preset
-
-    if (m == RECORD) rec_start();
-    else if (m == PLAYBACK) play_start();
-    else if (m == RELAY) relay_start();
-
-    console.log('Mode switched to:', m);
+    console.log('Mode switched to:', ['NONE', 'RECORD', 'PLAYBACK', 'RELAY'][MODE]);
 }
 function mode_data(universe, data) {
 
@@ -109,7 +107,15 @@ function mode_data(universe, data) {
 
 // Relay methods
 function relay_start() {
+    // console.log('RELAY_START');
     if (MODE == RELAY) return;
+    else if (MODE == PLAYBACK) play_stop()
+    else if (MODE == RECORD) rec_stop()
+    
+    modeStart = Date.now();
+    modeBuffer = [];
+    modeIndex = 0;
+
     MODE = RELAY;
     console.log('Relay started');
 }
@@ -132,9 +138,20 @@ function relay_stop() {
 }
 
 // Record methods
-function rec_start() {
-    if (MODE == RECORD) return;
+function rec_start(preset) {
+    // console.log('REC_START', preset);
+    if (MODE == RECORD && preset == PRESET) return;
+    else if (MODE == RECORD) rec_stop()
+    else if (MODE == PLAYBACK) play_stop()
+    else if (MODE == RELAY) relay_stop()
+
+    modeStart = Date.now();
+    modeBuffer = [];
+    modeIndex = 0;
+
     MODE = RECORD;
+    PRESET = preset;
+    
     console.log('Recording started for preset:', PRESET);
 }
 function rec_data(universe, data) {
@@ -183,17 +200,28 @@ function rec_stop() {
 }
 
 // Playback methods
-function play_start() {
-    if (MODE == PLAYBACK) return;
-    MODE = PLAYBACK;
+function play_start(preset) {
+    // console.log('PLAY_START', preset);
+    // if (MODE == PLAYBACK && preset == PRESET) return;
 
     // Load modeBuffer from file
-    let playFile = path.join(presetPath, 'preset_' + PRESET + '.csv');
+    let playFile = path.join(presetPath, 'preset_' + preset + '.csv');
     if (!fs.existsSync(playFile)) {
         console.log('Preset not found:', playFile);
-        relay_start()
+        // relay_start()
         return;
     }
+
+    if (MODE == RECORD) rec_stop()
+    else if (MODE == PLAYBACK) play_stop()
+    else if (MODE == RELAY) relay_stop()
+    
+    modeStart = Date.now();
+    modeBuffer = [];
+    modeIndex = 0;
+
+    MODE = PLAYBACK;
+    PRESET = preset;
 
     // Load buffer from csv
     let data = fs.readFileSync(playFile, 'utf8');
@@ -213,6 +241,7 @@ function play_start() {
 
         // no data
         if (modeIndex >= modeBuffer.length) {
+            console.log('No data to play, switching to RELAY mode');
             mode_switch(RELAY);     
             return;
         }
@@ -246,6 +275,7 @@ function play_data(universe, data) {
 }
 function play_stop() {
     if (MODE != PLAYBACK) return;
+    if (modeInterval) clearInterval(modeInterval);
     MODE = NONE;
     console.log('Playback stopped');
 }
@@ -287,5 +317,27 @@ hub.on('remote-input-new', (node, portnumber) => {
     SENDERS[port.portAddress].push(sender);
 });
 
+
+// OSC
+//
+const oscServer = new osc.Server(9000, '0.0.0.0');
+console.log('OSC Server listening on port 9000');
+
+// OSC messages
+oscServer.on('message', function (msg) {
+    // msg is an array: [address, ...args]
+    const address = msg[0];
+    const args = msg.slice(1);
+
+    if (address === '/hartnet/stop') {
+        console.log('OSC: /hartnet/stop received – switched to NONE');
+        mode_switch(NONE);
+    } else if (address === '/hartnet/play') {
+        // If an argument is provided, use it as the preset
+        const preset = args.length > 0 ? parseInt(args[0]) : 0;
+        console.log(`OSC: /hartnet/play ${preset} received – switched to PLAYBACK, preset ${preset}`);
+        mode_switch(PLAYBACK, preset);
+    }
+});
 
 

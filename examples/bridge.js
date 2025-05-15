@@ -303,10 +303,20 @@ hub.on('remote-input-new', (node, portnumber) => {
         console.log('-- Node not in downlink range, ignoring:', node.ip);
         return
     }
-    console.log('++ Remote input discovered:', node.ip, node.shortName);
     let port = node.inPorts[portnumber];
-
+    
     if (!SENDERS[port.portAddress]) SENDERS[port.portAddress] = []
+    
+    // check if sender already exists (portAddress / ip)
+    let senderExists = SENDERS[port.portAddress].some((sender) => {
+        return sender.options.to == node.ip;
+    });
+    if (senderExists) {
+        console.log('--Sender already exists, ignoring:', node.ip, node.shortName, port.portAddress);
+        return;
+    }
+    
+    // Add sender to SENDERS
     let sender = hub.newSender({
         to: node.ip,
         broadcast: false,
@@ -317,6 +327,7 @@ hub.on('remote-input-new', (node, portnumber) => {
         nickname: node.shortName,
     });
     SENDERS[port.portAddress].push(sender);
+    console.log('++ Remote input discovered:', node.ip, node.shortName, port.portAddress)
 });
 
 

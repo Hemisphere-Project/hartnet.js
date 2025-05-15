@@ -287,6 +287,7 @@ class hartnet extends EventEmitter {
           this.logger.debug('\t= Invalid ArtPollReply packet: too short');
           return;
         }
+        
 
         const format = '!7sBHBBBBHHBBHBBH18s64s64sH4B4B4B4B4B3HB6B4BBBB';
         const unpacked = jspack.Unpack(format, msg);
@@ -310,6 +311,10 @@ class hartnet extends EventEmitter {
           outPorts: []
         };
 
+        // if (apr.ip == '2.20.253.114') {
+        //   console.log('ArtPollReply:', msg.toString('hex').match(/.{2}/g).join(':'));
+        // }
+
         // Check if from myself
         if (INTERFACES.find((i) => i.ip === apr.ip)) {
           if (apr.shortName == this.options.sName && apr.longName == this.options.lName)
@@ -330,7 +335,13 @@ class hartnet extends EventEmitter {
           const swIn = apr.swIn[i];
           const swOut = apr.swOut[i];
 
-          if (portType & 0x80) {  // Input port
+          // if (apr.ip == '2.20.253.114') {
+          //   console.log('PortType:', portType, 'GoodInput:', goodInput, 'GoodOutput:', goodOutput, 'swIn:', swIn, 'swOut:', swOut);
+          //   console.log('PortType :', (portType & 0x80) ? 'Input' : (portType & 0x40) ? 'Output' : 'Unknown');
+          // }
+
+          // if (portType & 0x80) {  // Input port : fails with NodeMA !
+          if (goodInput === 1) {
             apr.inPorts.push({
               net: apr.net,
               subnet: apr.subNet,
@@ -340,7 +351,8 @@ class hartnet extends EventEmitter {
               isGood: goodInput === 1
             });
           }
-          if (portType & 0x40) {  // Output port
+          // if (portType & 0x40) {  // Output port : fails with NodeMA !
+          if (goodOutput === 1) {
             apr.outPorts.push({
               net: apr.net,
               subnet: apr.subNet,

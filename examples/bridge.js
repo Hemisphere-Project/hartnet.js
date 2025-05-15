@@ -46,8 +46,11 @@ if (!fs.existsSync(backupPath)) {
 
 // Create new hartnet instance
 //
+// get hostname from /etc/hostname
+var hostname = fs.readFileSync('/etc/hostname', 'utf8').trim();
+
 var hub = new hartnet({
-  name: "hartnet-bridge",
+  name: "hartnet-"+hostname,
   log_level: "info",
   poll_interval: 10000,
   poll_to: downlink,
@@ -93,9 +96,10 @@ function mode_data(universe, data) {
         // 512 enabled -> mode control
         if (data[511] == 0) return  // 512 at 0 -> do nothing, let current mode run
 
-        if (data[510] == 0) mode_switch(RELAY);                                           // 511 at 0             -> RELAY mode
-        else if (data[510] > 0 && data[510] < 100)   mode_switch(PLAYBACK, data[510]);    // 511 from 1 to 99     -> PLAYBACK mode
-        else if (data[510] > 100 && data[510] < 200) mode_switch(RECORD, data[510]-100);      // 511 from 101 to 199  -> RECORD mode
+        percent = Math.round(data[510]*100 / 255)
+        if (percent == 0) mode_switch(RELAY);                                               // percent at 0             -> RELAY mode
+        else if (percent >= 1 && percent <= 50)     mode_switch(RECORD, percent);           // percent from 1 to 50     -> PLAYBACK mode
+        else if (percent >= 51 && data[510] <= 100) mode_switch(PLAYBACK, percent-50);      // percent from 51 to 100   -> RECORD mode
 
         return;                                             // Universe 0 is reserved for mode control
     }

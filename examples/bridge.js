@@ -301,14 +301,19 @@ for (var i = 0; i < 16; i++)
 
 // Watch hub for new remote inputs
 //
-hub.on('remote-input-new', (node, portnumber) => {
+hub.on('remote-output-new', (node, portnumber) => {
     // check if node.ip is in downlink range
     if (!downNet.contains(node.ip)) {
         console.log('-- Node not in downlink range, ignoring:', node.ip);
         return
     }
-    let port = node.inPorts[portnumber];
+    let port = node.outPorts[portnumber];
     
+    if (port.portAddress == 0) {
+        console.log('-- Port address 0, ignoring:', node.ip, node.shortName, port.portAddress);
+        return;
+    }
+
     if (!SENDERS[port.portAddress]) SENDERS[port.portAddress] = []
     
     // check if sender already exists (portAddress / ip)
@@ -331,7 +336,7 @@ hub.on('remote-input-new', (node, portnumber) => {
         nickname: node.shortName,
     });
     SENDERS[port.portAddress].push(sender);
-    console.log('++ Remote input discovered:', node.ip, node.shortName, port.portAddress)
+    console.log('++ Remote output discovered:', node.ip, node.shortName, port.portAddress)
 });
 
 

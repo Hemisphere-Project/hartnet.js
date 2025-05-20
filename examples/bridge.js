@@ -307,6 +307,13 @@ hub.on('remote-output-new', (node, portnumber) => {
         console.log('-- Node not in downlink range, ignoring:', node.ip);
         return
     }
+
+    // ignore if it's another hartnet node (shortName contains "hartnet")
+    if (node.shortName.includes('hartnet')) {
+        console.log('-- other Hartnet node, ignoring:', node.ip, node.shortName);
+        return;
+    }
+
     let port = node.outPorts[portnumber];
     
     if (port.portAddress == 0) {
@@ -321,9 +328,9 @@ hub.on('remote-output-new', (node, portnumber) => {
         return sender.options.to == node.ip;
     });
     if (senderExists) {
-        console.log('--Sender already exists, ignoring:', node.ip, node.shortName, port.portAddress);
+        console.log('-- Sender already exists, ignoring:', node.ip, node.shortName, port.portAddress);
         return;
-    }
+    }    
     
     // Add sender to SENDERS
     let sender = hub.newSender({

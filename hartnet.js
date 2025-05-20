@@ -42,11 +42,11 @@ const INTERFACES = getNetworkInfo();
 class hartnet extends EventEmitter {
 
   options = {
-    oem: 0x2908,  // OEM code hex
-    esta: 0x0000, // ESTA code hex
-    port: 6454,   // Port listening for incoming data
-    name: 'hartnet-node', // Shortname
-    poll_interval: 5000,       // Interval for sending ArtPoll
+    oem: 0x2908,                    // OEM code hex
+    esta: 0x0000,                   // ESTA code hex
+    port: 6454,                     // Port listening for incoming data
+    name: 'hartnet-node',           // Shortname
+    poll_interval: 5000,            // Interval for sending ArtPoll
     poll_to: '0.0.0.0/0',           // Destination for ArtPoll
     log_level: 'info',
   }

@@ -340,8 +340,8 @@ class hartnet extends EventEmitter {
           //   console.log('PortType :', (portType & 0x80) ? 'Input' : (portType & 0x40) ? 'Output' : 'Unknown');
           // }
 
-          // if (portType & 0x80) {  // Input port : fails with NodeMA !
-          if (goodInput === 1) {
+          if (portType & 0x40) {  // Input port : fails with NodeMA !
+          // if (goodInput === 1) {
             apr.inPorts.push({
               net: apr.net,
               subnet: apr.subNet,
@@ -351,8 +351,8 @@ class hartnet extends EventEmitter {
               isGood: goodInput === 1
             });
           }
-          // if (portType & 0x40) {  // Output port : fails with NodeMA !
-          if (goodOutput === 1) {
+          if (portType & 0x80) {  // Output port : fails with NodeMA !
+          // if (goodOutput === 1) {
             apr.outPorts.push({
               net: apr.net,
               subnet: apr.subNet,
@@ -362,7 +362,13 @@ class hartnet extends EventEmitter {
               isGood: goodOutput === 1
             });
           }
+
+          // if (apr.ip == '2.176.16.133') {
+            // console.log('PortType:', portType, portType & 0x80, portType & 0x40, 'GoodInput:', goodInput, 'GoodOutput:', goodOutput, 'swIn:', swIn, 'swOut:', swOut);
+          // }
         }
+
+        
 
         // Find or create Node and update
         var node = this.nodes.get(apr.uid);

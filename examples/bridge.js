@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const Netmask = require('netmask').Netmask;
+const osc = require('node-osc');
 
 // Conf
 const presetPath = '/data/hartnet/presets';
@@ -43,10 +44,37 @@ if (!fs.existsSync(backupPath)) {
     console.log('Backup path created:', backupPath);
 }
 
+// Preload presets files
+const PRESETS_MEMORY = [];
+for (const file of fs.readdirSync(presetPath)) {
+    if (file.startsWith('preset_') && file.endsWith('.csv')) {
+        const presetNumber = parseInt(file.split('_')[1].split('.')[0]);
+        if (isNaN(presetNumber)) continue; // skip if not a valid preset
+        console.log('Preloading preset:', presetNumber);
+        const presetFile = path.join(presetPath, file);
+        const data = fs.readFileSync(presetFile, 'utf8');
+        const lines = data.split('\n');
+        const presetData = lines.map((line) => {
+            const values = line.split(',');
+            const time = parseInt(values[0]);
+            const universe = parseInt(values[1]);
+            const data = values.slice(2).map((v) => parseInt(v));
+            return {'time': time, 'universe': universe, 'data': data};
+        }).filter((trame) => {
+            return trame.time >= 0 && trame.universe > 0 && trame.universe < 16
+        });
+        PRESETS_MEMORY[presetNumber] = presetData;
+        console.log('Preset', presetNumber, 'loaded with', presetData.length, 'trames');
+    }
+}
+
 // Create new hartnet instance
 //
+// get hostname from /etc/hostname
+var hostname = fs.readFileSync('/etc/hostname', 'utf8').trim();
+
 var hub = new hartnet({
-  name: "hartnet-bridge",
+  name: "hartnet-"+hostname,
   log_level: "info",
   poll_interval: 10000,
   poll_to: downlink,
@@ -66,26 +94,23 @@ function dataLog(data) {
 
 // Global 
 function mode_switch(m, preset) {
-    if (m == MODE && preset == PRESET) {
-        // console.log('Already in mode:', m);
-        return;
+    // if (m == MODE && preset == PRESET) {
+    //     console.log('Already in mode:', m);
+    //     return;
+    // }
+
+    if (m == RECORD) rec_start(preset);
+    else if (m == PLAYBACK) play_start(preset);
+    else if (m == RELAY) relay_start();
+    
+    if (m == NONE) {
+        play_stop();
+        rec_stop();
+        relay_stop();
+        MODE = NONE;
     }
 
-    if (MODE == PLAYBACK) play_stop()
-    else if (MODE == RECORD) rec_stop()
-    else if (MODE == RELAY) relay_stop()
-
-    modeStart = Date.now();
-    modeBuffer = [];
-    modeIndex = 0;
-
-    PRESET = preset
-
-    if (m == RECORD) rec_start();
-    else if (m == PLAYBACK) play_start();
-    else if (m == RELAY) relay_start();
-
-    console.log('Mode switched to:', m);
+    console.log('Mode switched to:', ['NONE', 'RECORD', 'PLAYBACK', 'RELAY'][MODE]);
 }
 function mode_data(universe, data) {
 
@@ -95,9 +120,10 @@ function mode_data(universe, data) {
         // 512 enabled -> mode control
         if (data[511] == 0) return  // 512 at 0 -> do nothing, let current mode run
 
-        if (data[510] == 0) mode_switch(RELAY);                                           // 511 at 0             -> RELAY mode
-        else if (data[510] > 0 && data[510] < 100)   mode_switch(PLAYBACK, data[510]);    // 511 from 1 to 99     -> PLAYBACK mode
-        else if (data[510] > 100 && data[510] < 200) mode_switch(RECORD, data[510]-100);      // 511 from 101 to 199  -> RECORD mode
+        percent = Math.round(data[510]*100 / 255)
+        if (percent == 0) mode_switch(RELAY);                                               // percent at 0             -> RELAY mode
+        else if (percent >= 1 && percent <= 50)     mode_switch(RECORD, percent);           // percent from 1 to 50     -> PLAYBACK mode
+        else if (percent >= 51 && data[510] <= 100) mode_switch(PLAYBACK, percent-50);      // percent from 51 to 100   -> RECORD mode
 
         return;                                             // Universe 0 is reserved for mode control
     }
@@ -109,12 +135,19 @@ function mode_data(universe, data) {
 
 // Relay methods
 function relay_start() {
+    // console.log('RELAY_START');
     if (MODE == RELAY) return;
+    else if (MODE == PLAYBACK) play_stop()
+    else if (MODE == RECORD) rec_stop()
+    
+    modeStart = Date.now();
+    modeBuffer = [];
+    modeIndex = 0;
+
     MODE = RELAY;
     console.log('Relay started');
 }
 function relay_data(universe, data) {
-    if (MODE != RELAY) return;
     if (SENDERS[universe]) 
         SENDERS[universe].forEach((sender) => {
             sender.send(data);
@@ -132,9 +165,20 @@ function relay_stop() {
 }
 
 // Record methods
-function rec_start() {
-    if (MODE == RECORD) return;
+function rec_start(preset) {
+    // console.log('REC_START', preset);
+    if (MODE == RECORD && preset == PRESET) return;
+    else if (MODE == RECORD) rec_stop()
+    else if (MODE == PLAYBACK) play_stop()
+    else if (MODE == RELAY) relay_stop()
+
+    modeStart = Date.now();
+    modeBuffer = [];
+    modeIndex = 0;
+
     MODE = RECORD;
+    PRESET = preset;
+    
     console.log('Recording started for preset:', PRESET);
 }
 function rec_data(universe, data) {
@@ -142,6 +186,9 @@ function rec_data(universe, data) {
     let trame = {'time': Date.now()-modeStart, 'universe': universe, 'data': data};
     modeBuffer.push(trame);
     console.log('\t++ REC\tuniverse:', universe, '\tdata:', dataLog(data))
+
+    // Also relay
+    relay_data(universe, data);
 }
 function rec_stop() {
     if (MODE != RECORD) return;
@@ -183,36 +230,49 @@ function rec_stop() {
 }
 
 // Playback methods
-function play_start() {
-    if (MODE == PLAYBACK) return;
-    MODE = PLAYBACK;
+function play_start(preset) {
+    // console.log('PLAY_START', preset);
+    // if (MODE == PLAYBACK && preset == PRESET) return;
 
     // Load modeBuffer from file
-    let playFile = path.join(presetPath, 'preset_' + PRESET + '.csv');
+    let playFile = path.join(presetPath, 'preset_' + preset + '.csv');
     if (!fs.existsSync(playFile)) {
         console.log('Preset not found:', playFile);
-        relay_start()
+        // relay_start()
         return;
     }
 
+    if (MODE == RECORD) rec_stop()
+    else if (MODE == PLAYBACK) play_stop()
+    else if (MODE == RELAY) relay_stop()
+    
+    modeStart = Date.now();
+    modeBuffer = [];
+    modeIndex = 0;
+
+    MODE = PLAYBACK;
+    PRESET = preset;
+
     // Load buffer from csv
-    let data = fs.readFileSync(playFile, 'utf8');
-    let lines = data.split('\n');
-    modeBuffer = lines.map((line) => {
-        let values = line.split(',');
-        let time = parseInt(values[0]);
-        let universe = parseInt(values[1]);
-        let data = values.slice(2).map((v) => parseInt(v));
-        return {'time': time, 'universe': universe, 'data': data};
-    }).filter((trame) => {
-        return trame.time >= 0 && trame.universe > 0 && trame.universe < 16
-    });
+    // let data = fs.readFileSync(playFile, 'utf8');
+    // let lines = data.split('\n');
+    // modeBuffer = lines.map((line) => {
+    //     let values = line.split(',');
+    //     let time = parseInt(values[0]);
+    //     let universe = parseInt(values[1]);
+    //     let data = values.slice(2).map((v) => parseInt(v));
+    //     return {'time': time, 'universe': universe, 'data': data};
+    // }).filter((trame) => {
+    //     return trame.time >= 0 && trame.universe > 0 && trame.universe < 16
+    // });
+    modeBuffer = PRESETS_MEMORY[preset] || [];
 
     if (modeInterval) clearInterval(modeInterval);
     modeInterval = setInterval(() => {
 
         // no data
         if (modeIndex >= modeBuffer.length) {
+            console.log('No data to play, switching to RELAY mode');
             mode_switch(RELAY);     
             return;
         }
@@ -246,6 +306,7 @@ function play_data(universe, data) {
 }
 function play_stop() {
     if (MODE != PLAYBACK) return;
+    if (modeInterval) clearInterval(modeInterval);
     MODE = NONE;
     console.log('Playback stopped');
 }
@@ -265,16 +326,38 @@ for (var i = 0; i < 16; i++)
 
 // Watch hub for new remote inputs
 //
-hub.on('remote-input-new', (node, portnumber) => {
+hub.on('remote-output-new', (node, portnumber) => {
     // check if node.ip is in downlink range
     if (!downNet.contains(node.ip)) {
         console.log('-- Node not in downlink range, ignoring:', node.ip);
         return
     }
-    console.log('++ Remote input discovered:', node.ip, node.shortName);
-    let port = node.inPorts[portnumber];
+
+    // ignore if it's another hartnet node (shortName contains "hartnet")
+    if (node.shortName.includes('hartnet')) {
+        console.log('-- other Hartnet node, ignoring:', node.ip, node.shortName);
+        return;
+    }
+
+    let port = node.outPorts[portnumber];
+    
+    if (port.portAddress == 0) {
+        console.log('-- Port address 0, ignoring:', node.ip, node.shortName, port.portAddress);
+        return;
+    }
 
     if (!SENDERS[port.portAddress]) SENDERS[port.portAddress] = []
+    
+    // check if sender already exists (portAddress / ip)
+    let senderExists = SENDERS[port.portAddress].some((sender) => {
+        return sender.options.to == node.ip;
+    });
+    if (senderExists) {
+        console.log('-- Sender already exists, ignoring:', node.ip, node.shortName, port.portAddress);
+        return;
+    }    
+    
+    // Add sender to SENDERS
     let sender = hub.newSender({
         to: node.ip,
         broadcast: false,
@@ -285,7 +368,30 @@ hub.on('remote-input-new', (node, portnumber) => {
         nickname: node.shortName,
     });
     SENDERS[port.portAddress].push(sender);
+    console.log('++ Remote output discovered:', node.ip, node.shortName, port.portAddress)
 });
 
+
+// OSC
+//
+const oscServer = new osc.Server(9000, '0.0.0.0');
+console.log('OSC Server listening on port 9000');
+
+// OSC messages
+oscServer.on('message', function (msg) {
+    // msg is an array: [address, ...args]
+    const address = msg[0];
+    const args = msg.slice(1);
+
+    if (address === '/hartnet/stop') {
+        console.log('OSC: /hartnet/stop received – switched to NONE');
+        mode_switch(NONE);
+    } else if (address === '/hartnet/play') {
+        // If an argument is provided, use it as the preset
+        const preset = args.length > 0 ? parseInt(args[0]) : 0;
+        console.log(`OSC: /hartnet/play ${preset} received – switched to PLAYBACK, preset ${preset}`);
+        mode_switch(PLAYBACK, preset);
+    }
+});
 
 

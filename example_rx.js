@@ -1,6 +1,6 @@
-'use strict';
+"use strict";
 // Load dmxnet as libary
-var dmxlib = require('./lib.js');
+var dmxlib = require("./lib.js");
 // Create new dmxnet instance
 var dmxnet = new dmxlib.dmxnet({});
 
@@ -11,7 +11,11 @@ var receiver = dmxnet.newReceiver({
   net: 0,
 });
 
+dmxnet.sync((data) => {
+  console.log("Sync received:", data);
+});
+
 // Dump data if DMX Data is received
-receiver.on('data', function(data) {
-  console.log('DMX data:', data); // eslint-disable-line no-console
+receiver.on("data", function (data) {
+  console.log("DMX data:", data); // eslint-disable-line no-console
 });
